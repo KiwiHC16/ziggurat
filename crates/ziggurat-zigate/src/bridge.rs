@@ -30,6 +30,10 @@ const PROFILE_ZDO: u16 = 0x0000;
 const ZDO_DEVICE_ANNCE: u16 = 0x0013;
 const ZDO_MGMT_PERMIT_JOINING_REQ: u16 = 0x0036;
 const ZDO_MGMT_LQI_RSP: u16 = 0x8031;
+const CLUSTER_OTA: u16 = 0x0019;
+const OTA_QUERY_NEXT_IMAGE_REQUEST: u8 = 0x01;
+const OTA_QUERY_NEXT_IMAGE_RESPONSE: u8 = 0x02;
+const OTA_NO_IMAGE_AVAILABLE: u8 = 0x98;
 const BROADCAST_ROUTERS: Nwk = Nwk(0xFFFC);
 const DEFAULT_RADIUS: u8 = 30;
 
@@ -576,6 +580,8 @@ impl<P: RadioPhy> Bridge<P> {
                     self.device_announce(&data, lqi);
                 } else if profile_id == PROFILE_ZDO && dst_ep == 0 && cluster_id < 0x8000 {
                     self.answer_zdo(source, destination, cluster_id, &data);
+                } else if cluster_id == CLUSTER_OTA && destination.0 == 0x0000 {
+                    self.answer_ota_query(source, profile_id, src_ep, dst_ep, &data);
                 }
             }
             ZigbeeNotification::DeviceJoined { nwk, ieee, .. } => {
@@ -641,6 +647,48 @@ impl<P: RadioPhy> Bridge<P> {
             RouteDirective::Hint(HostRoute::NextHop(Nwk(nwk)))
         } else {
             RouteDirective::StackDecides
+        }
+    }
+
+    /// OTA Query Next Image Request → "no image available", as the ZiGate firmware's
+    /// OTA server answers when no image was loaded (0x0500, not supported here).
+    /// Abeille only logs these queries; without an answer the device asks every few
+    /// seconds and keeps looking for an OTA server with Match_Desc.
+    fn answer_ota_query(&self, source: Nwk, profile: u16, src_ep: u8, dst_ep: u8, data: &[u8]) {
+        let Some(&control) = data.first() else {
+            return;
+        };
+        let at = if control & 0x04 != 0 { 3 } else { 1 };
+        let (Some(&seq), Some(&command)) = (data.get(at), data.get(at + 1)) else {
+            return;
+        };
+        // Cluster-specific, client to server
+        if control & 0x0B != 0x01 || command != OTA_QUERY_NEXT_IMAGE_REQUEST {
+            return;
+        }
+        // Cluster-specific, server to client, no default response
+        let response = vec![
+            0x19,
+            seq,
+            OTA_QUERY_NEXT_IMAGE_RESPONSE,
+            OTA_NO_IMAGE_AVAILABLE,
+        ];
+        tracing::debug!("OTA query from {:04X}: no image available", source.0);
+        if let Err(e) = self.stack.send_aps_unicast(
+            source,
+            profile,
+            CLUSTER_OTA,
+            dst_ep,
+            src_ep,
+            ApsAck::Request,
+            DEFAULT_RADIUS,
+            response,
+            None,
+            false,
+            TxPriority::UserNormal,
+            self.route_to(source.0),
+        ) {
+            tracing::warn!("OTA response to {:04X} rejected: {e:?}", source.0);
         }
     }
 

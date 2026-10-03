@@ -683,3 +683,50 @@ async fn remote_switches_a_plug_through_a_group() {
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert!(plug.attribute(1, 0x0006, 0x0000).unwrap().value == [0]);
 }
+
+/// An OTA client's Query Next Image Request gets "no image available", as from a ZiGate
+#[tokio::test(start_paused = true)]
+async fn ota_queries_get_no_image_available() {
+    let s = setup("ota").await;
+
+    // Query Next Image Request as the Aqara plug sends it: field control 00,
+    // manufacturer 115F, image type 0018, file version 0000002B
+    s.router
+        .send_aps_unicast(
+            Nwk(0x0000),
+            0x0104,
+            0x0019,
+            1,
+            1,
+            ApsAck::Request,
+            30,
+            vec![
+                0x01, 0xA0, 0x01, 0x00, 0x5F, 0x11, 0x18, 0x00, 0x2B, 0x00, 0x00, 0x00,
+            ],
+            None,
+            false,
+            TxPriority::UserNormal,
+            RouteDirective::StackDecides,
+        )
+        .unwrap();
+
+    let response = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            for n in s.router.next_notifications().await {
+                if let ZigbeeNotification::ReceivedApsCommand {
+                    cluster_id: 0x0019,
+                    data,
+                    ..
+                } = n
+                {
+                    return data;
+                }
+            }
+        }
+    })
+    .await
+    .expect("OTA response from the coordinator");
+    // Cluster-specific server to client, same sequence, Query Next Image Response,
+    // NO_IMAGE_AVAILABLE
+    assert_eq!(response, [0x19, 0xA0, 0x02, 0x98]);
+}

@@ -161,10 +161,11 @@ pub fn answer(
             let out_count = usize::from(*body.get(out_at)?);
             let their_out = le16_list(body.get(out_at + 1..)?, out_count)?;
 
-            // Their client clusters match our servers, their servers our clients
+            // Spec 2.4.3.1.7: the request's input list is matched against our input
+            // (server) clusters, its output list against our output (client) clusters
             let matches = (profile == PROFILE_HA || profile == 0xFFFF)
-                && (their_out.iter().any(|c| IN_CLUSTERS.contains(c))
-                    || their_in.iter().any(|c| OUT_CLUSTERS.contains(c)));
+                && (their_in.iter().any(|c| IN_CLUSTERS.contains(c))
+                    || their_out.iter().any(|c| OUT_CLUSTERS.contains(c)));
             if !matches && !to_us {
                 return None;
             }
@@ -312,13 +313,21 @@ mod tests {
     }
 
     #[test]
-    fn match_desc_for_an_ias_zone() {
-        // An IAS zone looking for its CIE: seq, nwk FFFD, profile 0104, one server
-        // cluster 0500 (IAS Zone), no client cluster
-        let req = [0x09, 0xFD, 0xFF, 0x04, 0x01, 0x01, 0x00, 0x05, 0x00];
+    fn match_desc_matching() {
+        // An IAS zone looking for its CIE, which has IAS Zone as an output (client)
+        // cluster: seq, nwk FFFD, profile 0104, no input cluster, output 0500
+        let req = [0x09, 0xFD, 0xFF, 0x04, 0x01, 0x00, 0x01, 0x00, 0x05];
         let r = answer(0x5678, 0xFFFD, MATCH_DESC_REQ, &req, US).unwrap();
         assert_eq!((r.to, r.cluster), (0x5678, 0x8006));
         assert_eq!(r.asdu, [0x09, 0x00, 0x00, 0x00, 0x01, 0x01]);
+
+        // The Aqara plug looking for an OTA server (input cluster 0019), as captured
+        let req = [0x2E, 0xFD, 0xFF, 0x04, 0x01, 0x01, 0x19, 0x00, 0x00];
+        let r = answer(0x9481, 0xFFFD, MATCH_DESC_REQ, &req, US).unwrap();
+        assert_eq!(r.asdu, [0x2E, 0x00, 0x00, 0x00, 0x01, 0x01]);
+        // Server 0500 is not ours: not matched
+        let req = [0x0B, 0xFD, 0xFF, 0x04, 0x01, 0x01, 0x00, 0x05, 0x00];
+        assert!(answer(0x5678, 0xFFFD, MATCH_DESC_REQ, &req, US).is_none());
 
         // Nothing in common, broadcast: no answer
         let req = [0x0A, 0xFD, 0xFF, 0x04, 0x01, 0x01, 0x34, 0x12, 0x00];

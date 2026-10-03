@@ -83,7 +83,10 @@ impl<'a, P: RadioPhy> ExclusiveRadio for TapExclusive<'a, P> {
         self.inner.set_channel(channel)
     }
 
-    fn transmit(&self, frame: TxFrame) -> impl Future<Output = Result<TxResult, RadioError>> + Send {
+    fn transmit(
+        &self,
+        frame: TxFrame,
+    ) -> impl Future<Output = Result<TxResult, RadioError>> + Send {
         self.phy.record_tx(&frame);
         self.inner.transmit(frame)
     }

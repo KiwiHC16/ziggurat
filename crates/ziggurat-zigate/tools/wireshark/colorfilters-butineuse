@@ -1,4 +1,5 @@
-# Couleurs Butineuse (wireshark_plugin/zb.lua, emplacements temporaires 1, 4 et 7 de la palette par défaut)
+# Couleurs Butineuse (wireshark_plugin/zb.lua, emplacements temporaires 1, 4 et 7 de la palette par défaut) + Route Request (emplacement 8, ajouté le 03/10/2026)
 @Butineuse ZDO (slot 1)@zbee_aps.profile == 0x0000@[65535,49344,49344][0,0,0]
 @Butineuse ZCL (slot 4)@zbee_zcl@[49344,49344,65535][0,0,0]
 @Butineuse Link Status (slot 7)@zbee_nwk.cmd.id == 0x08@[49344,65535,49344][0,0,0]
+@Butineuse Route Request (slot 8)@zbee_nwk.cmd.id == 0x01@[65535,65535,49344][0,0,0]

@@ -32,7 +32,7 @@ Pilotage d'Abeille en ligne de commande, en `www-data` :
 ## `wireshark/`
 
 - `colorfilters-butineuse` : les couleurs du plugin Butineuse (`zb.lua`) en règles
-  permanentes, à placer en tête de `~/.config/wireshark/colorfilters`. Format :
+  permanentes (plus la Route Request, `zbee_nwk.cmd.id == 0x01`, en jaune clair), à placer en tête de `~/.config/wireshark/colorfilters`. Format :
   `@nom@filtre@[fond][texte]`, composantes sur 16 bits.
 - `Zigbee simulé.command` : lanceur macOS. Relaie la capture de `ziggurat-sim`
   (port 17760) dans un FIFO et ouvre Wireshark dessus (l'interface graphique ne démarre

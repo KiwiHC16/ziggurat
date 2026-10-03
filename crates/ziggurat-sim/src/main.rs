@@ -63,6 +63,10 @@ struct Args {
     #[arg(long, default_value = "127.0.0.1:9001")]
     control: SocketAddr,
 
+    /// Live capture of the air for Wireshark: `wireshark -k -i TCP@<host>:<port>`
+    #[arg(long, default_value = "0.0.0.0:17760")]
+    capture: SocketAddr,
+
     /// Announce the devices this many seconds after start, without waiting for the
     /// coordinator to open joins
     #[arg(long)]
@@ -268,6 +272,7 @@ async fn main() -> Result<()> {
         }
     }
     tokio::spawn(control(args.control, devices.clone()));
+    tokio::spawn(ziggurat_sim::pcap::serve(args.capture, medium.clone()));
     if let Some(delay) = args.announce_after {
         let devices: Vec<Arc<SimDevice>> = devices.clone();
         tokio::spawn(async move {

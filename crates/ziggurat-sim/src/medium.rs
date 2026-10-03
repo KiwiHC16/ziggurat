@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 use tokio::time::{Duration, Instant};
 use ziggurat_ieee_802154::types::{Eui64, Nwk, PanId};
 use ziggurat_ieee_802154::{Ieee802154Address, Ieee802154Frame, Ieee802154FrameHeader};
@@ -65,9 +65,20 @@ struct Inner {
     rng: u64,
 }
 
+/// A frame seen on the air, for sniffers. `psdu` has no FCS.
+#[derive(Debug, Clone)]
+pub struct AirFrame {
+    pub psdu: Vec<u8>,
+    pub channel: u8,
+    pub rssi: i8,
+    pub lqi: u8,
+    pub time: std::time::SystemTime,
+}
+
 pub struct Medium {
     inner: Mutex<Inner>,
     epoch: Instant,
+    sniffer: broadcast::Sender<AirFrame>,
 }
 
 impl Medium {
@@ -83,6 +94,7 @@ impl Medium {
                 rng: seed | 1,
             }),
             epoch: Instant::now(),
+            sniffer: broadcast::channel(4096).0,
         })
     }
 
@@ -203,16 +215,38 @@ impl Medium {
 
         for _ in 0..attempts {
             tokio::time::sleep(airtime).await;
+            self.sniff(frame.psdu.clone(), channel);
             let acked = self.deliver(from, channel, frame, header.as_ref());
             if !wants_ack {
                 return TxResult::Acked;
             }
             tokio::time::sleep(ACK_TIME).await;
             if acked {
+                // Imm-Ack: frame control 0x0002, then the acknowledged sequence number
+                if let Some(seq) = header.as_ref().and_then(|h| h.sequence_number) {
+                    self.sniff(vec![0x02, 0x00, seq], channel);
+                }
                 return TxResult::Acked;
             }
         }
         TxResult::NoAck
+    }
+
+    /// Every frame put on the air from now on, as a sniffer sees it
+    #[must_use]
+    pub fn sniffer(&self) -> broadcast::Receiver<AirFrame> {
+        self.sniffer.subscribe()
+    }
+
+    fn sniff(&self, psdu: Vec<u8>, channel: u8) {
+        // No sniffer connected is the normal case
+        let _ = self.sniffer.send(AirFrame {
+            psdu,
+            channel,
+            rssi: Link::PERFECT.rssi,
+            lqi: Link::PERFECT.lqi,
+            time: std::time::SystemTime::now(),
+        });
     }
 
     /// Deliver one attempt to every listening radio; returns whether the addressed

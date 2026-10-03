@@ -187,6 +187,13 @@ cargo run -p ziggurat-sim -- --network-state network.json --plug A4C138000000000
 echo "1A02 on" | nc -q1 127.0.0.1 9001     # aussi : off, toggle, announce ; « list »
 ```
 
+**Capture Wireshark de l'air simulé** : `ziggurat-sim` sert un flux pcap en direct
+(802.15.4 TAP : canal, RSSI, LQI ; accusés MAC inclus) sur `--capture` (0.0.0.0:17760).
+Sur la VM : `tshark -i TCP@127.0.0.1:17760`. Sur le Mac Studio : lanceur
+`~/Desktop/Zigbee simulé.command` (relais `nc` vers un FIFO, l'interface graphique de
+Wireshark ne démarrant pas sur `TCP@`). Déchiffrement : clé réseau (`network_key` du fichier
+d'état) et `ZigBeeAlliance09` dans `~/.config/wireshark/zigbee_pc_keys`.
+
 Les tests de bout en bout couvrent : démarrage de la pile sur la fausse clé Spinel, envoi APS
 avec accusé entre un coordinateur et un routeur simulés (en direct et via Spinel), et une
 liaison à sens unique (le cas du cellier) qui perd l'accusé.

@@ -29,7 +29,8 @@ Jeedom / Abeille ──socat──TCP 20108──▶ ziggurat-zigate ──Spine
 | Serveur ZDO du coordinateur (`zdo.rs`) : NWK/IEEE_addr, Node/Power/Simple_Desc, Active_EP, Match_Desc, Mgmt_Lqi local (004E vers 0000) | fait, testé (03/10) |
 | Appareils simulés (`ziggurat-sim --plug`) : prise BlitzWolf BW-SHP13 (TS011F `_TZ3000_amdymr7l`) qui répond en ZDO/ZCL | fait (03/10) : Abeille réel l'inclut, la reconnaît, la configure et la pilote (Off/On/Toggle, état, courant, puissance) |
 | Télécommande simulée (`ziggurat-sim --remote IEEE:NWK:GROUPE`) : IKEA TRADFRI on/off (E1743) qui commande un groupe ; table de groupes des appareils simulés | fait (03/10) : Abeille l'inclut ; la prise ajoutée au groupe 7A01 par Abeille suit les appuis On/Off |
-| Inclusion réelle d'un appareil (association, transport de clé) | non simulée : Ziggurat n'a pas de côté « joiner », les appareils simulés démarrent déjà sur le réseau |
+| Inclusion réelle d'un appareil (association, transport de clé) | non simulée (pas de côté « joiner » dans Ziggurat) ; **validée sur matériel le 03/10** |
+| Clé réelle Sonoff Dongle Plus MG24 (OpenThread RCP 2.7.2.0, 460800, contrôle de flux logiciel) | en service (03/10) : prise Aqara SP-EUC01 incluse en direct et pilotée ; télécommande IKEA 5 boutons incluse à travers la prise (routeur) |
 
 ## Lancer
 
@@ -38,7 +39,8 @@ Jeedom / Abeille ──socat──TCP 20108──▶ ziggurat-zigate ──Spine
 cargo run -p ziggurat-zigate -- observe
 
 # Passerelle complète (contrôle de flux coupé par défaut, pour la clé Sonoff)
-cargo run -p ziggurat-zigate -- run --device /dev/ttyUSB0 --baudrate 460800 --state network.json
+cargo run -p ziggurat-zigate -- run --device /dev/ttyUSB0 --baudrate 460800 \
+    --flow-control software --state network.json --capture 0.0.0.0:17761
 
 # Sur la fausse clé
 cargo run -p ziggurat-sim -- --listen 127.0.0.1:9000
@@ -163,16 +165,23 @@ Source : `crates/ziggurat-driver`, `crates/ziggurat-server`, `crates/ziggurat-pr
    avec 2-3 prises de rechange, en parallèle de la production.
 6. **Migration** ZiGate par ZiGate, en commençant par JnJ, avec un routeur vers le cellier.
 
-## Mise en service de la clé Sonoff Dongle Plus MG24
+## Mise en service de la clé Sonoff Dongle Plus MG24 (faite le 03/10/2026)
 
-1. Flasher le firmware **OpenThread RCP** avec l'outil web Sonoff
-   (<https://dongle.sonoff.tech/sonoff-dongle-flasher/>). Noter la version et le débit.
-2. Ce firmware n'a **pas de contrôle de flux matériel** : lancer avec `--flow-control none`
-   (option à ajouter au mode `run`) et le débit du firmware (115200 ou 460800).
-3. Le firmware Ziggurat du dépôt (`firmwares/efr32mg24`) vise la carte BRD2601B (broches,
-   quartz) : **ne pas l'utiliser** sur la clé Sonoff. La pile tourne sur l'hôte, un RCP standard suffit.
-4. VM Claude : QEMU arm64. Il faut passer la clé USB depuis l'hôte de la VM, et donner
-   l'accès série à `ben` (`usermod -aG dialout ben` en root, ou règle udev).
+1. **Flash** : firmware d'origine EmberZNet 7.4.5 (NCP, 115200) remplacé par
+   `sonoff_dongle-pmg24_openthread_rcp_2.7.2.0_GitHub-fb0446f53_460800_sw_flow.gbl`
+   (liste `SuiKaSan/silabs-firmware-list`, celle de l'outil web Sonoff ; SHA-256
+   `a3cf53ef…6d4ade` vérifié) avec `universal-silabs-flasher` (venv `~/dev/zigbee-tools`).
+   Retour arrière : `zigbee_ncp 8.2.2.0` de la même liste.
+2. Ce firmware utilise le **contrôle de flux logiciel** (XON/XOFF, compatible Spinel) :
+   `--baudrate 460800 --flow-control software`.
+3. Le firmware Ziggurat du dépôt (`firmwares/efr32mg24`) vise la carte BRD2601B : **ne pas
+   l'utiliser** sur la clé Sonoff ; un RCP standard suffit, la pile tourne sur l'hôte.
+4. **USB vers la VM Claude** (UTM sur le Mac Studio), à refaire après un redémarrage de la VM
+   ou un débranchement :
+   `/Applications/UTM.app/Contents/MacOS/utmctl usb connect "Claude VM" 10C4:EA60`
+   → `/dev/ttyUSB0` (CP210x). `ben` est dans `dialout`. Ne pas faire passer la radio par le
+   réseau : le Mac Studio est en WiFi.
+5. Abeille : ZiGate 2 en WIFI sur `127.0.0.1:20109` (`tools/abeille/abeille_gtw2.php`).
 
 ## Tests sans matériel
 

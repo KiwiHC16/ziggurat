@@ -63,6 +63,9 @@ enum Mode {
         /// status periods, so routers know their link cost to the coordinator
         #[arg(long, default_value_t = 35)]
         warm_up: u64,
+        /// Live capture of the radio's traffic for Wireshark (`-i TCP@<host>:<port>`)
+        #[arg(long)]
+        capture: Option<SocketAddr>,
     },
 }
 
@@ -84,6 +87,7 @@ async fn main() -> Result<()> {
             tx_power,
             allow_erase,
             warm_up,
+            capture,
         } => {
             server::run(RunConfig {
                 device,
@@ -95,6 +99,7 @@ async fn main() -> Result<()> {
                 allow_erase,
                 listen: args.listen,
                 warm_up: std::time::Duration::from_secs(warm_up),
+                capture,
             })
             .await
         }

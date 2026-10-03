@@ -52,6 +52,8 @@ pub struct RunConfig {
     /// Delay before accepting Abeille, so that link status exchanges establish link
     /// costs: until then routers refuse route replies and unicasts to them fail
     pub warm_up: Duration,
+    /// Serve a live capture of what the radio sends and receives (Wireshark)
+    pub capture: Option<SocketAddr>,
 }
 
 /// `tcp://host:port` (wired network RCP or ser2net), or a serial device path. Same
@@ -81,6 +83,22 @@ pub async fn run(config: RunConfig) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("reading the radio EUI64: {e}"))?;
     tracing::info!("Radio EUI64 {}", eui_to_hex(hw));
 
+    match config.capture {
+        Some(listen) => {
+            let (feed, _) = tokio::sync::broadcast::channel(4096);
+            tokio::spawn(ziggurat_sim::pcap::serve(listen, feed.clone()));
+            let tapped = Arc::new(crate::capture::TapPhy::new(phy, feed));
+            run_on(tapped, hw, config).await
+        }
+        None => run_on(phy, hw, config).await,
+    }
+}
+
+async fn run_on<P: RadioPhy>(
+    phy: Arc<P>,
+    hw: ziggurat_ieee_802154::types::Eui64,
+    config: RunConfig,
+) -> Result<()> {
     let bridge = start_bridge(phy, hw, &config).await?;
     if !config.warm_up.is_zero() {
         tracing::info!(

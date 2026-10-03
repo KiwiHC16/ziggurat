@@ -42,6 +42,7 @@ fn config(state_path: std::path::PathBuf) -> RunConfig {
         allow_erase: false,
         listen: "127.0.0.1:0".parse().unwrap(),
         warm_up: Duration::ZERO,
+        capture: None,
     }
 }
 

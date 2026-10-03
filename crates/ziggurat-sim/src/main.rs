@@ -272,7 +272,7 @@ async fn main() -> Result<()> {
         }
     }
     tokio::spawn(control(args.control, devices.clone()));
-    tokio::spawn(ziggurat_sim::pcap::serve(args.capture, medium.clone()));
+    tokio::spawn(ziggurat_sim::pcap::serve(args.capture, medium.sniffer_feed()));
     if let Some(delay) = args.announce_after {
         let devices: Vec<Arc<SimDevice>> = devices.clone();
         tokio::spawn(async move {

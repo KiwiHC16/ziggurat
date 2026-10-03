@@ -139,6 +139,14 @@ Source : `crates/ziggurat-driver`, `crates/ziggurat-server`, `crates/ziggurat-pr
   Abeille qu'après `--warm-up` (35 s). Piste à remonter au projet Ziggurat (un voisin direct
   pourrait être joint sans attendre le coût).
 
+- **Pas d'envoi direct à un routeur voisin.** Ziggurat n'envoie directement qu'aux enfants
+  appareils terminaux ; vers un routeur, même voisin, il exige une route ou en cherche une.
+  Un routeur qui vient de rejoindre ignore la recherche (coût de liaison inconnu) : la
+  première interrogation d'Abeille échouait (8011 A7) et l'équipement restait sans modèle
+  (prise Aqara, 03/10). La passerelle donne désormais `RouteDirective::Hint(NextHop(dst))`
+  pour tout destinataire présent dans la table des voisins (envoi direct, comme la norme et
+  la ZiGate) ; la pile garde la priorité si elle a une route.
+
 ## Plan
 
 1. **Observer** (sans clé) : `observe` sur la VM, une ZiGate WiFi de test dans Abeille

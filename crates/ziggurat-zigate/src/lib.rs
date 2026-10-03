@@ -4,6 +4,7 @@
 //! `ab::gtwIpAddr = <host>:20108`. See README.md for the contract and the plan.
 
 pub mod bridge;
+pub mod capture;
 pub mod frame;
 #[allow(dead_code)] // Not every ZiGate message type is wired in yet
 pub mod msg;

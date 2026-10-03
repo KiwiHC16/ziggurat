@@ -5,7 +5,6 @@
 //! `-i TCP@<host>:<port>`, no capture privileges needed.
 
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
 use tokio::io::AsyncWriteExt;
@@ -13,7 +12,9 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast::error::RecvError;
 use ziggurat_ieee_802154::{FrameBytes, Ieee802154Frame};
 
-use crate::medium::{AirFrame, Medium};
+use tokio::sync::broadcast;
+
+use crate::medium::AirFrame;
 
 /// `LINKTYPE_IEEE802_15_4_TAP`
 pub const LINKTYPE_IEEE802_15_4_TAP: u32 = 283;
@@ -80,7 +81,8 @@ pub fn record(frame: &AirFrame) -> Vec<u8> {
 }
 
 /// Serve the live capture to any number of Wireshark instances
-pub async fn serve(listen: SocketAddr, medium: Arc<Medium>) {
+/// `frames` is any source of air frames: the simulated medium, or a tap on a real radio
+pub async fn serve(listen: SocketAddr, frames: broadcast::Sender<AirFrame>) {
     let listener = match TcpListener::bind(listen).await {
         Ok(listener) => listener,
         Err(e) => {
@@ -97,13 +99,12 @@ pub async fn serve(listen: SocketAddr, medium: Arc<Medium>) {
             continue;
         };
         tracing::info!("Capture client {peer} connected");
-        tokio::spawn(stream_to(stream, Arc::clone(&medium)));
+        tokio::spawn(stream_to(stream, frames.subscribe()));
     }
 }
 
-async fn stream_to(mut stream: TcpStream, medium: Arc<Medium>) {
+async fn stream_to(mut stream: TcpStream, mut frames: broadcast::Receiver<AirFrame>) {
     let _ = stream.set_nodelay(true);
-    let mut frames = medium.sniffer();
     if stream.write_all(&global_header()).await.is_err() {
         return;
     }

@@ -9,7 +9,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::Instant;
 use ziggurat_driver::zigbee_stack::{
-    ApsAck, DeliveryError, RouteDirective, SendHandle, TxPriority, ZigbeeNotification, ZigbeeStack,
+    ApsAck, DeliveryError, HostRoute, RouteDirective, SendHandle, TxPriority, ZigbeeNotification,
+    ZigbeeStack,
 };
 use ziggurat_ieee_802154::types::{Eui64, Nwk};
 use ziggurat_phy::RadioPhy;
@@ -385,7 +386,7 @@ impl<P: RadioPhy> Bridge<P> {
                     None,
                     false,
                     TxPriority::UserNormal,
-                    RouteDirective::StackDecides,
+                    self.route_to(nwk),
                 ),
                 aps_ack,
                 nwk,
@@ -621,6 +622,28 @@ impl<P: RadioPhy> Bridge<P> {
         self.save();
     }
 
+    /// Route for a unicast. A device in the neighbor table is sent to directly when
+    /// the stack has no route (Zigbee 3.6.3.3), as the ZiGate does: Ziggurat would
+    /// otherwise run a route discovery that a router which just joined ignores, since
+    /// it does not know its link cost yet, and Abeille's interrogation right after the
+    /// Device_annce fails. The stack still prefers any route it has.
+    fn route_to(&self, nwk: u16) -> RouteDirective {
+        let is_neighbor = self
+            .stack
+            .state
+            .core
+            .lock()
+            .nib
+            .neighbors
+            .link(Nwk(nwk))
+            .is_some();
+        if is_neighbor {
+            RouteDirective::Hint(HostRoute::NextHop(Nwk(nwk)))
+        } else {
+            RouteDirective::StackDecides
+        }
+    }
+
     /// The coordinator's own ZDO server (descriptors, address and match requests)
     fn answer_zdo(&self, source: Nwk, destination: Nwk, cluster: u16, data: &[u8]) {
         let Ok(coordinator) = self.state.lock().expect("state lock").coordinator() else {
@@ -647,7 +670,7 @@ impl<P: RadioPhy> Bridge<P> {
             None,
             false,
             TxPriority::UserNormal,
-            RouteDirective::StackDecides,
+            self.route_to(response.to),
         ) {
             tracing::warn!("ZDO response to {:04X} rejected: {e:?}", source.0);
         }

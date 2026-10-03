@@ -238,6 +238,12 @@ impl Medium {
         self.sniffer.subscribe()
     }
 
+    /// The sniffer feed itself, for a capture server
+    #[must_use]
+    pub fn sniffer_feed(&self) -> broadcast::Sender<AirFrame> {
+        self.sniffer.clone()
+    }
+
     fn sniff(&self, psdu: Vec<u8>, channel: u8) {
         // No sniffer connected is the normal case
         let _ = self.sniffer.send(AirFrame {

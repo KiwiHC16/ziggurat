@@ -388,7 +388,7 @@ impl<P: RadioPhy> Bridge<P> {
                     radius,
                     asdu,
                     None,
-                    false,
+                    self.is_sleepy(nwk),
                     TxPriority::UserNormal,
                     self.route_to(nwk),
                 ),
@@ -621,11 +621,35 @@ impl<P: RadioPhy> Bridge<P> {
         };
         let nwk = u16::from_le_bytes([*n0, *n1]);
         tracing::info!("Device announce: {nwk:04X} {:?}", Eui64(ieee));
+        // Capability bit 3: receiver on when idle
+        let sleepy = capability & 0x08 == 0;
+        {
+            let ieee = crate::state::eui_to_hex(Eui64(ieee));
+            let mut state = self.state.lock().expect("state lock");
+            state.sleepy.retain(|known| *known != ieee);
+            if sleepy {
+                state.sleepy.push(ieee);
+            }
+        }
         self.emit_lqi(
             msg::device_announce(nwk, eui_to_u64(Eui64(ieee)), *capability),
             lqi,
         );
         self.save();
+    }
+
+    /// Whether a device sleeps (receiver off when idle): its parent holds frames for it
+    /// until it polls, so the APS ack needs the stack's longer timeout. Ziggurat only
+    /// knows this for its own children.
+    fn is_sleepy(&self, nwk: u16) -> bool {
+        let sleepy = self.state.lock().expect("state lock").sleepy.clone();
+        if sleepy.is_empty() {
+            return false;
+        }
+        ziggurat_protocol::address_entries(&self.stack)
+            .into_iter()
+            .find(|entry| entry.nwk.0 == nwk)
+            .is_some_and(|entry| sleepy.contains(&crate::state::eui_to_hex(entry.ieee)))
     }
 
     /// Route for a unicast. A device in the neighbor table is sent to directly when

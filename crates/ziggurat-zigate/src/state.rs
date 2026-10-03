@@ -45,6 +45,10 @@ pub struct NetworkState {
     pub children: Vec<Child>,
     #[serde(default)]
     pub link_keys: Vec<LinkKey>,
+    /// IEEE of devices whose receiver is off when idle (Device_annce capability), so
+    /// that sends to them get the stack's longer APS ack timeout
+    #[serde(default)]
+    pub sleepy: Vec<String>,
 }
 
 /// An IEEE ↔ NWK address mapping
@@ -147,6 +151,7 @@ impl NetworkState {
             devices: Vec::new(),
             children: Vec::new(),
             link_keys: Vec::new(),
+            sleepy: Vec::new(),
         })
     }
 

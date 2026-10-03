@@ -14,6 +14,15 @@ Installation contrôlée de Jeedom (fork gitlab2 `jeedom/core` cloné dans
 
 Nécessite le correctif `DB::Prepare` (branche `ziggurat` de `jeedom/core`) sous PHP 8.
 
+## Plugins Jeedom
+
+Depuis le 03/10, la passerelle et le simulateur tournent sous Jeedom, par deux plugins
+(dépôts gitlab2 `jeedom/zigguratzigate` et `jeedom/zigguratsim`) : un équipement par
+passerelle ou par simulateur, démons surveillés par Jeedom, logs `zigguratzigate_<id>` et
+`zigguratsim_<id>`, fichiers d'état dans `plugins/zigguratzigate/data/` (www-data, 0600,
+interdits au web par `/etc/apache2/conf-available/ziggurat-data.conf`). Les programmes
+sont dans `/usr/local/bin`. Les boutons des appareils simulés sont des commandes Jeedom.
+
 ## `abeille/*.php`
 
 Pilotage d'Abeille en ligne de commande, en `www-data` :

@@ -3,11 +3,8 @@
 //! Abeille connects to it like to a ZiGate WiFi: `ab::gtwSubType = WIFI`,
 //! `ab::gtwIpAddr = <host>:20108`. See README.md for the contract and the plan.
 
-mod frame;
-#[allow(dead_code)] // Message types are wired in as the bridge grows
-mod msg;
-
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -15,7 +12,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tracing_subscriber::EnvFilter;
 
-use frame::HostDecoder;
+use ziggurat_zigate::frame::{self, HostDecoder};
+use ziggurat_zigate::server::{self, FlowControlMode, RunConfig};
+use ziggurat_zigate::{hex, msg};
 
 /// Coordinator IEEE used by `observe` mode. Abeille pins the IEEE it first sees in
 /// `ab::zgIeeeAddrX` and ignores everything but 0x8000 if it later changes.
@@ -39,17 +38,27 @@ enum Mode {
     /// No radio: decode and log what Abeille sends, and answer the gateway-level
     /// handshake (8000/8010/8024/8014) so its startup sequence can be checked
     Observe,
-    /// Full bridge over an OpenThread RCP (not implemented yet)
+    /// The bridge over an OpenThread RCP (or `ziggurat-sim`)
     Run {
         /// RCP serial device, or `tcp://host:port` over Ethernet
         #[arg(long)]
         device: String,
-        /// The Sonoff Dongle Plus MG24 OpenThread RCP firmware has no hardware flow control
         #[arg(long, default_value_t = 460_800)]
         baudrate: u32,
+        /// The Sonoff Dongle Plus MG24 OpenThread RCP firmware has no hardware flow control
+        #[arg(long, value_enum, default_value_t = FlowControlMode::None)]
+        flow_control: FlowControlMode,
         /// Network state file (keys, frame counters, devices): the ZiGate PDM equivalent
         #[arg(long, default_value = "ziggurat-zigate.json")]
-        state: std::path::PathBuf,
+        state: PathBuf,
+        /// Channel when forming a new network; an existing one keeps its channel
+        #[arg(long, default_value_t = 25)]
+        channel: u8,
+        #[arg(long, default_value_t = 8)]
+        tx_power: i8,
+        /// Let Abeille's "erase PDM" (0x0012) wipe the network
+        #[arg(long)]
+        allow_erase: bool,
     },
 }
 
@@ -62,8 +71,26 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     match args.mode {
         Mode::Observe => observe(args.listen).await,
-        Mode::Run { device, .. } => {
-            anyhow::bail!("run mode is not implemented yet (device {device}); use `observe`")
+        Mode::Run {
+            device,
+            baudrate,
+            flow_control,
+            state,
+            channel,
+            tx_power,
+            allow_erase,
+        } => {
+            server::run(RunConfig {
+                device,
+                baudrate,
+                flow_control,
+                state_path: state,
+                channel,
+                tx_power,
+                allow_erase,
+                listen: args.listen,
+            })
+            .await
         }
     }
 }
@@ -134,12 +161,4 @@ async fn observe_connection(mut stream: TcpStream) -> Result<()> {
             }
         }
     }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write;
-    bytes.iter().fold(String::new(), |mut s, b| {
-        let _ = write!(s, "{b:02X}");
-        s
-    })
 }

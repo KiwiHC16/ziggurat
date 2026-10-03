@@ -38,10 +38,9 @@ async fn main() -> Result<()> {
         .init();
     let args = Args::parse();
 
-    let mut hw = Eui64::try_from_hex(&args.hw_address)
+    // try_from_hex takes the printed (big-endian) form and stores over-the-air order
+    let hw = Eui64::try_from_hex(&args.hw_address)
         .map_err(|e| anyhow::anyhow!("bad --hw-address: {e:?}"))?;
-    // Eui64 is stored in over-the-air (little-endian) order
-    hw.0.reverse();
 
     let medium = Medium::new(args.seed);
     let dongle = medium.add_node("dongle", hw);

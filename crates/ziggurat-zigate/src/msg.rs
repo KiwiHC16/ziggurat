@@ -53,6 +53,7 @@ pub const TIME: u16 = 0x8017;
 pub const NETWORK_FORMED: u16 = 0x8024;
 pub const LEAVE_INDICATION: u16 = 0x8048;
 pub const APS_DATA_FAILURE: u16 = 0x8702;
+pub const TX_POWER_SET: u16 = 0x8806;
 pub const TX_POWER: u16 = 0x8807;
 pub const DEVICE_ANNOUNCE: u16 = 0x004D;
 
@@ -125,6 +126,51 @@ pub fn network_formed(status: u8, nwk: u16, ieee: u64, channel: u8) -> Message {
     }
 }
 
+/// 0x8009 network state: `addr(2) ieee(8) pan(2) ext_pan(8) channel`.
+#[must_use]
+pub fn network_state(nwk: u16, ieee: u64, pan: u16, ext_pan: u64, channel: u8) -> Message {
+    let mut payload = nwk.to_be_bytes().to_vec();
+    payload.extend(ieee.to_be_bytes());
+    payload.extend(pan.to_be_bytes());
+    payload.extend(ext_pan.to_be_bytes());
+    payload.push(channel);
+    Message {
+        msg_type: NETWORK_STATE,
+        payload,
+    }
+}
+
+/// 0x8017: seconds since 2000-01-01.
+#[must_use]
+pub fn time(seconds_since_2000: u32) -> Message {
+    Message {
+        msg_type: TIME,
+        payload: seconds_since_2000.to_be_bytes().to_vec(),
+    }
+}
+
+/// 0x8806/0x8807: TX power.
+#[must_use]
+pub fn tx_power(msg_type: u16, dbm: i8) -> Message {
+    Message {
+        msg_type,
+        payload: vec![dbm.cast_unsigned()],
+    }
+}
+
+/// 0x8702 APS data failure: `status src_ep dst_ep dst_mode(02) addr(2) sqn_aps npdu apdu`.
+/// Abeille only logs it.
+#[must_use]
+pub fn aps_failure(status: u8, src_ep: u8, dst_ep: u8, dst: u16, sqn_aps: u8) -> Message {
+    let mut payload = vec![status, src_ep, dst_ep, 0x02];
+    payload.extend(dst.to_be_bytes());
+    payload.extend([sqn_aps, 0x00, 0x00]);
+    Message {
+        msg_type: APS_DATA_FAILURE,
+        payload,
+    }
+}
+
 /// 0x8014: permit-join state, 0x01 = open.
 #[must_use]
 pub fn permit_join_status(open: bool) -> Message {
@@ -180,6 +226,8 @@ pub struct Indication<'a> {
     pub dst_ep: u8,
     pub src_nwk: u16,
     pub dst_nwk: u16,
+    /// Set for group-addressed frames: reported with destination mode 0x01
+    pub dst_group: Option<u16>,
     /// The raw APS payload (ZDO seq + body, or a full ZCL frame), little-endian
     pub asdu: &'a [u8],
 }
@@ -188,6 +236,7 @@ pub struct Indication<'a> {
 /// `status profile(2) cluster(2) src_ep dst_ep src_mode src(2) dst_mode dst(2) asdu`.
 #[must_use]
 pub fn data_indication(ind: &Indication<'_>) -> Message {
+    const GROUP: u8 = 0x01;
     const SHORT: u8 = 0x02;
     let mut payload = vec![0x00];
     payload.extend(ind.profile.to_be_bytes());
@@ -196,8 +245,16 @@ pub fn data_indication(ind: &Indication<'_>) -> Message {
     payload.push(ind.dst_ep);
     payload.push(SHORT);
     payload.extend(ind.src_nwk.to_be_bytes());
-    payload.push(SHORT);
-    payload.extend(ind.dst_nwk.to_be_bytes());
+    match ind.dst_group {
+        Some(group) => {
+            payload.push(GROUP);
+            payload.extend(group.to_be_bytes());
+        }
+        None => {
+            payload.push(SHORT);
+            payload.extend(ind.dst_nwk.to_be_bytes());
+        }
+    }
     payload.extend_from_slice(ind.asdu);
     Message {
         msg_type: DATA_INDICATION,
@@ -230,6 +287,7 @@ mod tests {
             dst_ep: 0x01,
             src_nwk: 0x2AAE,
             dst_nwk: 0x0000,
+            dst_group: None,
             asdu: &[0x18, 0x30, 0x0A],
         });
         assert_eq!(

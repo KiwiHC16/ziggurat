@@ -24,7 +24,8 @@ Jeedom / Abeille ──socat──TCP 20108──▶ ziggurat-zigate ──Spine
 | Messages et réponses ZiGate (`msg.rs`) | builders 8000/8002/8010/8011/8014/8024/004D/8048 faits |
 | Mode `observe` (sans radio) | fait : décode et journalise ce qu'envoie Abeille, répond à la poignée de main |
 | Simulateur de clé (`crates/ziggurat-sim`) | fait, testé avec la pile complète |
-| Mode `run` (passerelle complète) | à faire |
+| Mode `run` : pile Ziggurat, persistance (`state.rs`), 0530 → APS, 8000/8011 avec `sqnAps`, 8002, 004D, 8048, inclusion 0049/0014, 0009/0016/0017/0806/0807 | fait, testé sur le simulateur et avec Abeille réel (03/10) |
+| Commandes natives (0100, 0045, 0043, 0042, 0041, 0030…) et ZDO du coordinateur | à faire (étape 3) ; répondues 8000 statut 02 pour l'instant |
 
 ## Lancer
 
@@ -32,10 +33,18 @@ Jeedom / Abeille ──socat──TCP 20108──▶ ziggurat-zigate ──Spine
 # Observer Abeille sans radio (pointer une ZiGate WiFi d'Abeille sur <IP VM>:20108)
 cargo run -p ziggurat-zigate -- observe
 
-# Plus tard : passerelle complète
-cargo run -p ziggurat-zigate -- run --device /dev/ttyUSB0 --baudrate 460800
-cargo run -p ziggurat-zigate -- run --device tcp://127.0.0.1:9000   # sur le simulateur
+# Passerelle complète (contrôle de flux coupé par défaut, pour la clé Sonoff)
+cargo run -p ziggurat-zigate -- run --device /dev/ttyUSB0 --baudrate 460800 --state network.json
+
+# Sur la fausse clé
+cargo run -p ziggurat-sim -- --listen 127.0.0.1:9000
+cargo run -p ziggurat-zigate -- run --device tcp://127.0.0.1:9000 --state network.json
 ```
+
+Le fichier `--state` est l'équivalent du PDM : clé réseau, PAN, canal, compteurs de trames
+(avancés de 1024 à chaque démarrage), clés de lien, enfants, table d'adresses. Le perdre
+oblige à réappairer tous les appareils : le sauvegarder. Abeille ne peut pas l'effacer
+(0x0012 refusé) sauf avec `--allow-erase`.
 
 Côté Abeille (ZiGate n° X) : `ab::gtwType = zigate`, `ab::gtwSubType = WIFI`,
 `ab::gtwIpAddr = <ip>:20108` (sans `:port`, Abeille utilise 9999). Si on remplace une

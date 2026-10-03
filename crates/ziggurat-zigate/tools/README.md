@@ -49,3 +49,10 @@ Pilotage d'Abeille en ligne de commande, en `www-data` :
 Déchiffrement : `~/.config/wireshark/zigbee_pc_keys` avec la clé réseau (champ
 `network_key` du fichier d'état) et `ZigBeeAlliance09`
 (`5A6967426565416C6C69616E63653039`).
+
+## `../docs/blocs.html`
+
+Schéma des blocs (environnement simulé, puis montage réel avec la clé MG24). Servi par
+l'Apache de la VM sur http://192.168.4.124/ziggurat/ : copie dans `/var/www/ziggurat-doc/index.html`,
+`Alias /ziggurat` dans `/etc/apache2/conf-available/ziggurat-doc.conf` (`a2enconf ziggurat-doc`).
+Après une modification : `install -m 644 docs/blocs.html /var/www/ziggurat-doc/index.html` (en root).

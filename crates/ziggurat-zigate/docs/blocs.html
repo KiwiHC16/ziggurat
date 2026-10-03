@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Passerelle Ziggurat Abeille</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one wide schematic first, then two reference tables, single column, generous gutter */
+:root {
+  --bg: #f6f7f5;
+  --fg: #1d2422;
+  --muted: #5e6a66;
+  --line: #9aa6a1;
+  --panel: #ffffff;
+  --zone: #eceeeb;
+  --accent: #0f7b6c;
+  --accent-soft: #e2f1ee;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141917; --fg: #e3e8e5; --muted: #98a59f; --line: #5b6863;
+    --panel: #1c2320; --zone: #19201d; --accent: #4cc4b0; --accent-soft: #173430;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #141917; --fg: #e3e8e5; --muted: #98a59f; --line: #5b6863;
+  --panel: #1c2320; --zone: #19201d; --accent: #4cc4b0; --accent-soft: #173430;
+  color-scheme: dark;
+}
+body { background: var(--bg); color: var(--fg); font: 15px/1.55 var(--sans); }
+main { max-width: 1200px; margin: 0 auto; padding-inline: 20px; padding-block: 28px 48px; display: grid; gap: 28px; }
+header { display: grid; gap: 6px; max-width: 70ch; }
+.eyebrow { font: 500 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+h1 { font-size: 26px; line-height: 1.2; font-weight: 600; margin: 0; text-wrap: balance; }
+h2 { font-size: 17px; font-weight: 600; margin: 0 0 10px; }
+p { margin: 0; color: var(--muted); }
+figure { margin: 0; display: grid; gap: 10px; }
+.scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--zone); }
+svg.schema { display: block; width: 100%; min-width: 900px; height: auto; color: var(--fg); }
+figcaption { color: var(--muted); font-size: 13.5px; max-width: 90ch; }
+.legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.sw { width: 26px; height: 14px; border-radius: 3px; border: 1.5px solid var(--line); background: var(--panel); }
+.sw.ours { border-color: var(--accent); background: var(--accent-soft); }
+.sw.future { border-style: dashed; }
+
+/* SVG classes, styled from the page so both themes apply */
+.zone { fill: var(--zone); stroke: var(--line); stroke-width: 1; }
+.group { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 4 3; }
+.box { fill: var(--panel); stroke: var(--line); stroke-width: 1.2; }
+.box.ours { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
+.box.future { stroke-dasharray: 6 4; }
+.t { fill: var(--fg); font: 600 12.5px var(--sans); }
+.s { fill: var(--muted); font: 400 10.5px var(--mono); }
+.h { fill: var(--muted); font: 600 11px var(--mono); letter-spacing: .07em; }
+.lbl { fill: var(--muted); font: 400 10.5px var(--sans); }
+.lbl.a { fill: var(--accent); }
+.w { fill: none; stroke: var(--fg); stroke-width: 1.3; }
+.w.dash { stroke-dasharray: 5 4; }
+.arrowhead { fill: var(--fg); }
+
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+td code, td.mono { font-family: var(--mono); font-size: 13px; }
+.tables { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 28px; }
+.tables > section { min-width: 0; overflow-x: auto; }
+</style>
+</head>
+<body>
+
+<main>
+  <header>
+    <div class="eyebrow">Branche ziggurat · 03/10/2026</div>
+    <h1>Blocs logiciels de la passerelle Ziggurat pour Abeille</h1>
+    <p>Abeille croit parler à une ZiGate WiFi ; derrière, la passerelle fait tourner la pile Zigbee Ziggurat et pilote une radio OpenThread RCP : la fausse clé du simulateur, ou la vraie clé Sonoff MG24, en service depuis le 03/10.</p>
+  </header>
+
+  <figure>
+    <div class="scroll">
+      <svg class="schema" viewBox="0 0 1180 610" role="img" aria-label="Chaîne Abeille, socat, passerelle ziggurat-zigate, pile Ziggurat, SpinelPhy, puis soit la fausse clé du simulateur et son air simulé avec une prise et une télécommande, soit la clé MG24 ; l'air simulé est capturé vers Wireshark sur le Mac Studio.">
+        <defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path class="arrowhead" d="M0,0 L10,5 L0,10 z"/>
+          </marker>
+        </defs>
+
+        <!-- Column headings -->
+        <text class="h" x="20" y="30">JEEDOM · VM CLAUDE</text>
+        <text class="h" x="300" y="30">PASSERELLE · ziggurat-zigate</text>
+        <text class="h" x="660" y="30">RADIO</text>
+        <text class="h" x="920" y="30">APPAREILS ET OBSERVATION</text>
+
+        <!-- Zones -->
+        <rect class="zone" x="20" y="44" width="250" height="404" rx="6"/>
+        <rect class="zone" x="300" y="44" width="330" height="452" rx="6"/>
+        <rect class="zone" x="660" y="160" width="500" height="340" rx="6"/>
+        <text class="h" x="676" y="182">ziggurat-sim · fausse clé + air simulé</text>
+
+        <!-- Jeedom / Abeille -->
+        <rect class="group" x="36" y="70" width="218" height="196" rx="5"/>
+        <text class="h" x="48" y="88">PLUGIN ABEILLE</text>
+        <rect class="box" x="48" y="96" width="194" height="34" rx="4"/>
+        <text class="t" x="145" y="117" text-anchor="middle">AbeilleCmdD · file d'envoi</text>
+        <rect class="box" x="48" y="144" width="194" height="44" rx="4"/>
+        <text class="t" x="145" y="162" text-anchor="middle">AbeilleSocat</text>
+        <text class="s" x="145" y="177" text-anchor="middle">pty /tmp/zigateWifi1</text>
+        <rect class="box" x="48" y="212" width="194" height="40" rx="4"/>
+        <text class="t" x="145" y="229" text-anchor="middle">AbeilleParserD</text>
+        <text class="s" x="145" y="243" text-anchor="middle">décode 8000 · 8002 · 004D</text>
+        <rect class="box" x="36" y="296" width="218" height="52" rx="4"/>
+        <text class="t" x="145" y="318" text-anchor="middle">Jeedom + MariaDB</text>
+        <text class="s" x="145" y="333" text-anchor="middle">prise #2 · télécommande #3</text>
+        <rect class="box ours" x="36" y="382" width="218" height="52" rx="4"/>
+        <text class="t" x="145" y="404" text-anchor="middle">tools/abeille/*.php</text>
+        <text class="s" x="145" y="419" text-anchor="middle">inclusion · groupe · On/Off</text>
+
+        <line class="w" x1="145" y1="130" x2="145" y2="142" marker-end="url(#ah)"/>
+        <text class="lbl" x="151" y="140">écrit</text>
+        <line class="w" x1="145" y1="188" x2="145" y2="210" marker-end="url(#ah)"/>
+        <text class="lbl" x="151" y="203">reçoit</text>
+        <line class="w" x1="145" y1="252" x2="145" y2="294" marker-end="url(#ah)"/>
+        <text class="lbl" x="151" y="278">met à jour</text>
+        <polyline class="w" points="36,408 28,408 28,113 46,113" marker-end="url(#ah)"/>
+        <text class="lbl" x="24" y="300" text-anchor="middle" transform="rotate(-90 24 300)">Abeille::msgToCmd</text>
+
+        <!-- Abeille ↔ passerelle -->
+        <line class="w" x1="244" y1="166" x2="314" y2="166" marker-start="url(#ah)" marker-end="url(#ah)"/>
+        <text class="lbl a" x="279" y="158" text-anchor="middle">TCP 20108</text>
+
+        <!-- Passerelle -->
+        <rect class="box ours" x="316" y="64" width="298" height="48" rx="4"/>
+        <text class="t" x="465" y="84" text-anchor="middle">state.rs · état du réseau (PDM)</text>
+        <text class="s" x="465" y="99" text-anchor="middle">ziggurat-zigate.json (0600)</text>
+        <rect class="box ours" x="316" y="144" width="298" height="44" rx="4"/>
+        <text class="t" x="465" y="162" text-anchor="middle">server.rs</text>
+        <text class="s" x="465" y="177" text-anchor="middle">trames ZiGate v1 · warm-up 35 s</text>
+        <rect class="box ours" x="316" y="212" width="298" height="56" rx="4"/>
+        <text class="t" x="465" y="235" text-anchor="middle">bridge.rs · personnalité ZiGate</text>
+        <text class="s" x="465" y="251" text-anchor="middle">8000 en FIFO · 8011 · 8002 · 004D · 8048</text>
+        <rect class="box ours" x="316" y="292" width="130" height="48" rx="4"/>
+        <text class="t" x="381" y="311" text-anchor="middle">native.rs</text>
+        <text class="s" x="381" y="326" text-anchor="middle">0100 · 0045 · 0030…</text>
+        <rect class="box ours" x="484" y="292" width="130" height="48" rx="4"/>
+        <text class="t" x="549" y="311" text-anchor="middle">zdo.rs</text>
+        <text class="s" x="549" y="326" text-anchor="middle">ZDO coordinateur</text>
+        <rect class="box" x="316" y="364" width="298" height="56" rx="4"/>
+        <text class="t" x="465" y="387" text-anchor="middle">Pile Ziggurat (ZigbeeStack)</text>
+        <text class="s" x="465" y="403" text-anchor="middle">NWK · APS · sécurité · routage</text>
+        <rect class="box" x="316" y="440" width="298" height="44" rx="4"/>
+        <text class="t" x="465" y="458" text-anchor="middle">SpinelPhy</text>
+        <text class="s" x="465" y="473" text-anchor="middle">client Spinel (OpenThread RCP)</text>
+
+        <line class="w" x1="465" y1="188" x2="465" y2="210" marker-end="url(#ah)"/>
+        <text class="lbl" x="471" y="203">commande</text>
+        <line class="w" x1="381" y1="268" x2="381" y2="290" marker-end="url(#ah)"/>
+        <text class="lbl" x="387" y="283">traduit</text>
+        <line class="w" x1="549" y1="268" x2="549" y2="290" marker-end="url(#ah)"/>
+        <text class="lbl" x="555" y="283">répond</text>
+        <line class="w" x1="458" y1="268" x2="458" y2="362" marker-end="url(#ah)"/>
+        <line class="w" x1="472" y1="364" x2="472" y2="270" marker-end="url(#ah)"/>
+        <text class="lbl" x="452" y="357" text-anchor="end">envoie</text>
+        <text class="lbl" x="478" y="357">notifie</text>
+        <line class="w" x1="465" y1="420" x2="465" y2="438" marker-end="url(#ah)"/>
+        <text class="lbl" x="471" y="433">RadioPhy</text>
+        <polyline class="w" points="614,236 622,236 622,88 616,88" marker-end="url(#ah)"/>
+        <text class="lbl" x="638" y="162" text-anchor="middle" transform="rotate(-90 638 162)">sauve · restaure</text>
+
+        <!-- Radio -->
+        <rect class="box" x="676" y="72" width="200" height="64" rx="4"/>
+        <text class="t" x="776" y="96" text-anchor="middle">Sonoff Dongle Plus MG24</text>
+        <text class="s" x="776" y="111" text-anchor="middle">OpenThread RCP · USB série</text>
+        <text class="lbl a" x="776" y="126" text-anchor="middle">en service · schéma 2</text>
+        <polyline class="w dash" points="614,476 650,476 650,104 674,104" marker-end="url(#ah)"/>
+
+        <rect class="box ours" x="676" y="300" width="200" height="56" rx="4"/>
+        <text class="t" x="776" y="323" text-anchor="middle">medium.rs · air 802.15.4</text>
+        <text class="s" x="776" y="339" text-anchor="middle">accusés MAC · pertes par sens</text>
+        <rect class="box ours" x="676" y="440" width="200" height="44" rx="4"/>
+        <text class="t" x="776" y="458" text-anchor="middle">rcp.rs · fausse clé</text>
+        <text class="s" x="776" y="473" text-anchor="middle">Spinel sur TCP 9000</text>
+
+        <line class="w" x1="616" y1="462" x2="674" y2="462" marker-start="url(#ah)" marker-end="url(#ah)"/>
+        <text class="lbl a" x="644" y="455" text-anchor="middle">Spinel</text>
+        <line class="w" x1="776" y1="358" x2="776" y2="438" marker-start="url(#ah)" marker-end="url(#ah)"/>
+        <text class="lbl" x="782" y="402">trames</text>
+
+        <!-- Appareils et observation -->
+        <rect class="box ours" x="936" y="196" width="208" height="36" rx="4"/>
+        <text class="t" x="1040" y="218" text-anchor="middle">Boutons · port 9001 (nc)</text>
+        <rect class="box ours" x="936" y="252" width="208" height="50" rx="4"/>
+        <text class="t" x="1040" y="273" text-anchor="middle">Télécommande IKEA 1A02</text>
+        <text class="s" x="1040" y="288" text-anchor="middle">E1743 · On / Off</text>
+        <rect class="box ours" x="936" y="322" width="208" height="50" rx="4"/>
+        <text class="t" x="1040" y="343" text-anchor="middle">Prise BlitzWolf 1A01</text>
+        <text class="s" x="1040" y="358" text-anchor="middle">TS011F · membre de 7A01</text>
+        <rect class="box ours" x="936" y="420" width="208" height="44" rx="4"/>
+        <text class="t" x="1040" y="438" text-anchor="middle">pcap.rs · capture</text>
+        <text class="s" x="1040" y="453" text-anchor="middle">TCP 17760 · 802.15.4 TAP</text>
+
+        <line class="w" x1="1040" y1="232" x2="1040" y2="250" marker-end="url(#ah)"/>
+        <text class="lbl" x="1046" y="246">appuie</text>
+        <line class="w dash" x1="1040" y1="302" x2="1040" y2="320" marker-end="url(#ah)"/>
+        <text class="lbl" x="1046" y="315">groupe 7A01</text>
+
+        <polyline class="w" points="878,312 906,312" />
+        <line class="w" x1="906" y1="277" x2="906" y2="341"/>
+        <line class="w" x1="906" y1="277" x2="934" y2="277" marker-end="url(#ah)"/>
+        <line class="w" x1="906" y1="341" x2="934" y2="341" marker-end="url(#ah)"/>
+        <text class="lbl" x="882" y="305">radio</text>
+        <polyline class="w" points="878,350 918,350 918,442 934,442" marker-end="url(#ah)"/>
+        <text class="lbl" x="924" y="398">chaque trame</text>
+
+        <rect class="box" x="920" y="530" width="240" height="64" rx="4"/>
+        <text class="t" x="1040" y="552" text-anchor="middle">Mac Studio · Wireshark 4.6.9</text>
+        <text class="s" x="1040" y="567" text-anchor="middle">nc → FIFO → Wireshark</text>
+        <text class="s" x="1040" y="582" text-anchor="middle">clés Zigbee · couleurs Butineuse</text>
+        <line class="w" x1="1040" y1="464" x2="1040" y2="528" marker-end="url(#ah)"/>
+        <text class="lbl a" x="1046" y="502">TCP 17760</text>
+      </svg>
+    </div>
+    <figcaption>Schéma 1, environnement simulé. Tout tourne sur la VM Claude, sauf Wireshark sur le Mac Studio. La passerelle ne voit qu'une radio Spinel : remplacer la fausse clé par la MG24 ne change que le paramètre <code>--device</code>. La flèche pointillée vers la clé MG24 est l'autre radio possible (schéma 2) ; celle de la télécommande vers la prise passe en fait par l'air simulé.</figcaption>
+    <div class="legend">
+      <span><i class="sw ours"></i>Code écrit pour ce projet (branche ziggurat)</span>
+      <span><i class="sw"></i>Existant : Abeille, Jeedom, pile Ziggurat, SpinelPhy</span>
+    </div>
+  </figure>
+
+  <figure>
+    <h2>Schéma 2 · Avec la vraie clé MG24</h2>
+    <div class="scroll">
+      <svg class="schema" viewBox="0 0 1180 620" role="img" aria-label="La clé Sonoff MG24 est branchée sur le Mac Studio, passée en USB par UTM à la VM Claude où elle devient /dev/ttyUSB0 ; ziggurat-zigate lui parle en Spinel et sert Abeille sur le port 20109 et Wireshark sur le port 17761. Sur le canal 25, la clé est coordinateur, la prise Aqara routeur, et la télécommande IKEA dort derrière la prise qui lui garde ses messages 7,68 secondes.">
+        <defs>
+          <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path class="arrowhead" d="M0,0 L10,5 L0,10 z"/>
+          </marker>
+        </defs>
+
+        <text class="h" x="20" y="30">MAC STUDIO · macOS</text>
+        <text class="h" x="410" y="30">VM CLAUDE · Debian dans UTM</text>
+        <rect class="zone" x="20" y="44" width="360" height="380" rx="6"/>
+        <rect class="zone" x="410" y="44" width="750" height="380" rx="6"/>
+        <rect class="zone" x="20" y="450" width="1140" height="150" rx="6"/>
+        <text class="h" x="36" y="472">AIR · CANAL 25 · PAN 2570</text>
+
+        <!-- Mac Studio -->
+        <rect class="box" x="40" y="80" width="320" height="70" rx="4"/>
+        <text class="t" x="200" y="102" text-anchor="middle">Wireshark 4.6.9</text>
+        <text class="s" x="200" y="118" text-anchor="middle">Zigbee réel.command · nc → FIFO</text>
+        <text class="s" x="200" y="134" text-anchor="middle">clés Zigbee · couleurs Butineuse</text>
+        <rect class="box" x="40" y="200" width="320" height="52" rx="4"/>
+        <text class="t" x="200" y="221" text-anchor="middle">UTM · passage USB</text>
+        <text class="s" x="200" y="238" text-anchor="middle">utmctl usb connect "Claude VM" 10C4:EA60</text>
+        <rect class="box" x="40" y="310" width="320" height="76" rx="4"/>
+        <text class="t" x="200" y="333" text-anchor="middle">Sonoff Dongle-PMG24 (port USB)</text>
+        <text class="s" x="200" y="350" text-anchor="middle">EFR32MG24 · OpenThread RCP 2.7.2</text>
+        <text class="s" x="200" y="366" text-anchor="middle">coordinateur 0000 · F044D3FFFE47487E</text>
+        <line class="w" x1="200" y1="308" x2="200" y2="254" marker-end="url(#ah2)"/>
+        <text class="lbl" x="206" y="286">USB · CP210x</text>
+
+        <!-- UTM -> VM -->
+        <line class="w" x1="362" y1="226" x2="428" y2="226" marker-start="url(#ah2)" marker-end="url(#ah2)"/>
+        <text class="lbl a" x="395" y="218" text-anchor="middle">USB</text>
+
+        <!-- VM -->
+        <rect class="box" x="430" y="200" width="200" height="52" rx="4"/>
+        <text class="t" x="530" y="221" text-anchor="middle">/dev/ttyUSB0</text>
+        <text class="s" x="530" y="238" text-anchor="middle">460 800 bauds · XON/XOFF</text>
+        <rect class="box ours" x="670" y="180" width="260" height="92" rx="4"/>
+        <text class="t" x="800" y="204" text-anchor="middle">ziggurat-zigate run</text>
+        <text class="s" x="800" y="221" text-anchor="middle">pile Ziggurat · SpinelPhy</text>
+        <text class="s" x="800" y="237" text-anchor="middle">sonde de capture · warm-up 35 s</text>
+        <text class="s" x="800" y="253" text-anchor="middle">appareils endormis · OTA · Match_Desc</text>
+        <rect class="box" x="970" y="180" width="170" height="92" rx="4"/>
+        <text class="t" x="1055" y="204" text-anchor="middle">Abeille · Jeedom</text>
+        <text class="s" x="1055" y="221" text-anchor="middle">Ruche-Abeille2</text>
+        <text class="s" x="1055" y="237" text-anchor="middle">#7 prise Aqara</text>
+        <text class="s" x="1055" y="253" text-anchor="middle">#8 télécommande</text>
+        <rect class="box ours" x="670" y="320" width="260" height="52" rx="4"/>
+        <text class="t" x="800" y="341" text-anchor="middle">zigbee-real.json (0600)</text>
+        <text class="s" x="800" y="358" text-anchor="middle">clé réseau · compteurs · endormis</text>
+
+        <line class="w" x1="632" y1="226" x2="668" y2="226" marker-start="url(#ah2)" marker-end="url(#ah2)"/>
+        <text class="lbl a" x="650" y="292" text-anchor="middle">Spinel</text>
+        <line class="w" x1="650" y1="282" x2="650" y2="230"/>
+        <line class="w" x1="932" y1="226" x2="968" y2="226" marker-start="url(#ah2)" marker-end="url(#ah2)"/>
+        <text class="lbl a" x="950" y="292" text-anchor="middle">TCP 20109</text>
+        <line class="w" x1="950" y1="282" x2="950" y2="230"/>
+        <line class="w" x1="800" y1="274" x2="800" y2="318" marker-start="url(#ah2)" marker-end="url(#ah2)"/>
+        <text class="lbl" x="806" y="300">sauve · restaure</text>
+
+        <!-- Capture back to the Mac -->
+        <polyline class="w" points="800,178 800,62 300,62 300,78" marker-end="url(#ah2)"/>
+        <text class="lbl a" x="560" y="56" text-anchor="middle">capture · TCP 17761 · ce que la clé émet et reçoit</text>
+
+        <!-- Air -->
+        <rect class="box" x="420" y="500" width="280" height="76" rx="4"/>
+        <text class="t" x="560" y="523" text-anchor="middle">Prise Aqara SP-EUC01 · 9481</text>
+        <text class="s" x="560" y="540" text-anchor="middle">routeur · voisin direct de la clé</text>
+        <text class="s" x="560" y="556" text-anchor="middle">RSSI −42 dBm (LQI figé à 255)</text>
+        <rect class="box" x="840" y="500" width="300" height="76" rx="4"/>
+        <text class="t" x="990" y="523" text-anchor="middle">Télécommande IKEA E1524 · 8734</text>
+        <text class="s" x="990" y="540" text-anchor="middle">sur pile · enfant de la prise</text>
+        <text class="s" x="990" y="556" text-anchor="middle">bind On/Off → groupe 0x996A</text>
+
+        <polyline class="w" points="320,388 320,538 418,538" marker-start="url(#ah2)" marker-end="url(#ah2)"/>
+        <text class="lbl" x="326" y="430">radio 2,4 GHz</text>
+        <line class="w" x1="702" y1="538" x2="838" y2="538" marker-start="url(#ah2)" marker-end="url(#ah2)"/>
+        <text class="lbl a" x="770" y="530" text-anchor="middle">garde 7,68 s</text>
+        <text class="lbl" x="770" y="554" text-anchor="middle">interroge au réveil</text>
+      </svg>
+    </div>
+    <figcaption>La clé est branchée sur le Mac Studio, mais c'est la VM qui l'utilise : UTM lui passe le périphérique USB, à refaire après un redémarrage de la VM ou un débranchement. Wireshark ne peut pas renifler l'air avec cette clé (elle est le coordinateur) : il voit ce que la passerelle envoie à la radio et reçoit d'elle, sans les accusés MAC. La télécommande ne parle pas directement à la clé : la prise garde ses messages jusqu'à 7,68 s, le temps qu'elle se réveille.</figcaption>
+  </figure>
+
+  <div class="tables">
+    <section>
+      <h2>Rôle de chaque bloc</h2>
+      <table>
+        <thead><tr><th>Bloc</th><th>Ce qu'il fait</th></tr></thead>
+        <tbody>
+          <tr><td><code>server.rs</code></td><td>Ouvre la radio, forme ou restaure le réseau, accepte Abeille après 35 s.</td></tr>
+          <tr><td><code>bridge.rs</code></td><td>Une 0x8000 par commande, dans l'ordre ; 0x8011 avec le même numéro à l'accusé ; NPDU toujours 0.</td></tr>
+          <tr><td><code>native.rs</code></td><td>Commandes natives d'Abeille traduites comme le firmware 3.23 (ZDO et ZCL).</td></tr>
+          <tr><td><code>zdo.rs</code></td><td>Répond aux appareils à la place de la ZiGate : adresses, descripteurs, Match_Desc.</td></tr>
+          <tr><td><code>state.rs</code></td><td>Clé, PAN, compteurs (+1024 au démarrage), clés de lien, adresses : l'équivalent du PDM.</td></tr>
+          <tr><td><code>ziggurat-sim</code></td><td>Fausse clé Spinel, air simulé, prise et télécommande, boutons et capture.</td></tr>
+        </tbody>
+      </table>
+    </section>
+    <section>
+      <h2>Ports et fichiers</h2>
+      <table>
+        <thead><tr><th>Où</th><th>Quoi</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">127.0.0.1:20108</td><td>Abeille ↔ passerelle (trames ZiGate)</td></tr>
+          <tr><td class="mono">127.0.0.1:9000</td><td>Passerelle ↔ fausse clé (Spinel)</td></tr>
+          <tr><td class="mono">127.0.0.1:9001</td><td>Boutons : <code>echo "1A02 on" | nc -q1 127.0.0.1 9001</code></td></tr>
+          <tr><td class="mono">0.0.0.0:17760</td><td>Capture de l'air simulé pour Wireshark</td></tr>
+          <tr><td class="mono">127.0.0.1:20109</td><td>Abeille (ZiGate 2) ↔ passerelle de la clé réelle</td></tr>
+          <tr><td class="mono">/dev/ttyUSB0</td><td>Clé MG24, passée par UTM</td></tr>
+          <tr><td class="mono">0.0.0.0:17761</td><td>Capture de la clé réelle pour Wireshark</td></tr>
+          <tr><td class="mono">~/dev/jeedomvm/ziggurat-zigate.json</td><td>État du réseau simulé, mode 0600</td></tr>
+          <tr><td class="mono">~/dev/jeedomvm/zigbee-real.json</td><td>État du réseau réel, mode 0600, à sauvegarder</td></tr>
+          <tr><td class="mono">gitlab2 jeedom/ziggurat</td><td>Branche <code>ziggurat</code> : passerelle, simulateur, outils</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </div>
+</main>
+</body>
+</html>

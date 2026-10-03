@@ -1,0 +1,28 @@
+[package]
+name = "ziggurat-zigate"
+version.workspace = true
+description = "ZiGate v1 serial protocol emulator on top of the Ziggurat Zigbee stack, for the Jeedom Abeille plugin"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+ziggurat-spinel.workspace = true
+ziggurat-phy.workspace = true
+ziggurat-phy-spinel.workspace = true
+ziggurat-driver.workspace = true
+ziggurat-zigbee.workspace = true
+
+anyhow = "1"
+clap = { version = "4.6", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "chrono"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "io-util", "signal"] }
+
+[[bin]]
+name = "ziggurat-zigate"
+path = "src/main.rs"
+doc = false

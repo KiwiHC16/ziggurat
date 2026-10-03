@@ -1,0 +1,34 @@
+[package]
+name = "ziggurat-sim"
+version.workspace = true
+description = "Simulated 802.15.4 medium, radio and OpenThread RCP for testing the Ziggurat stack without hardware"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+ziggurat-ieee-802154.workspace = true
+ziggurat-phy.workspace = true
+ziggurat-spinel.workspace = true
+
+anyhow = "1"
+clap = { version = "4.6", features = ["derive"] }
+parking_lot = "0.12.5"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "io-util"] }
+
+[dev-dependencies]
+ziggurat-driver.workspace = true
+ziggurat-phy-spinel.workspace = true
+ziggurat-zigbee.workspace = true
+tokio = { version = "1.53.1", features = ["test-util"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[[bin]]
+name = "ziggurat-sim"
+path = "src/main.rs"
+doc = false

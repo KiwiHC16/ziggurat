@@ -7,8 +7,10 @@ pub mod bridge;
 pub mod frame;
 #[allow(dead_code)] // Not every ZiGate message type is wired in yet
 pub mod msg;
+pub mod native;
 pub mod server;
 pub mod state;
+pub mod zdo;
 
 /// Upper-case hex, as Abeille logs frames
 #[must_use]

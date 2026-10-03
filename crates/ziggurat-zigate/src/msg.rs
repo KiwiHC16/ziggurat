@@ -39,6 +39,21 @@ pub const BIND: u16 = 0x0030;
 pub const UNBIND: u16 = 0x0031;
 pub const MGMT_LEAVE: u16 = 0x0047;
 pub const LEAVE_REQUEST: u16 = 0x004C;
+pub const ADD_GROUP: u16 = 0x0060;
+pub const GET_GROUP_MEMBERSHIP: u16 = 0x0062;
+pub const REMOVE_GROUP: u16 = 0x0063;
+pub const REMOVE_ALL_GROUPS: u16 = 0x0064;
+pub const IDENTIFY: u16 = 0x0070;
+pub const MOVE_TO_LEVEL_ONOFF: u16 = 0x0081;
+pub const LEVEL_STEP: u16 = 0x0082;
+pub const LEVEL_STOP: u16 = 0x0084;
+pub const ON_OFF: u16 = 0x0092;
+pub const ON_OFF_TIMED: u16 = 0x0093;
+pub const MOVE_TO_COLOUR: u16 = 0x00B7;
+pub const MOVE_TO_COLOUR_TEMPERATURE: u16 = 0x00C0;
+pub const WINDOW_COVERING: u16 = 0x00FA;
+pub const READ_REPORTING_CONFIG: u16 = 0x0122;
+pub const DISCOVER_ATTRIBUTES: u16 = 0x0140;
 
 // Gateway → host
 pub const STATUS: u16 = 0x8000;

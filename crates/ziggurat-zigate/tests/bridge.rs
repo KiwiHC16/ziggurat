@@ -174,13 +174,22 @@ async fn handshake_matches_abeille_expectations() {
     let (permit, _) = expect(&mut s.abeille, msg::PERMIT_JOIN_STATUS).await;
     assert_eq!(permit.payload, [0x01]);
 
-    // Native commands not implemented yet are refused cleanly, one 8000 each
+    // Commands not implemented yet are refused cleanly, one 8000 each
+    s.bridge.handle(&Message {
+        msg_type: 0x0026,
+        payload: vec![0x00, 0x00],
+    });
+    let (status, _) = expect(&mut s.abeille, msg::STATUS).await;
+    assert_eq!(status.payload[0], 0x02);
+    assert_eq!(status.payload[2..4], [0x00, 0x26]);
+
+    // A malformed native command too
     s.bridge.handle(&Message {
         msg_type: msg::READ_ATTRIBUTE,
         payload: vec![0x02, 0x2A, 0xAE, 0x01, 0x01],
     });
     let (status, _) = expect(&mut s.abeille, msg::STATUS).await;
-    assert_eq!(status.payload[0], 0x02);
+    assert_eq!(status.payload[0], 0x01);
     assert_eq!(status.payload[2..4], [0x01, 0x00]);
 }
 
@@ -330,4 +339,74 @@ async fn restart_restores_the_network() {
     assert_eq!(after.network_key, before.network_key);
     assert_eq!(after.coordinator_ieee, before.coordinator_ieee);
     assert!(after.nwk_frame_counter > before.nwk_frame_counter);
+}
+
+#[tokio::test(start_paused = true)]
+async fn native_read_attribute_reaches_the_device() {
+    let mut s = setup("native-read").await;
+
+    // Abeille readAttribute: cluster 0000, attributes 0004 (manufacturer) and 0005 (model)
+    s.bridge.handle(&Message {
+        msg_type: msg::READ_ATTRIBUTE,
+        payload: vec![
+            0x02, 0x2A, 0xAE, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x04,
+            0x00, 0x05,
+        ],
+    });
+    let (status, _) = expect(&mut s.abeille, msg::STATUS).await;
+    assert_eq!(status.payload[..5], [0x00, 0x01, 0x01, 0x00, 0x01]);
+
+    let (source, cluster, data) =
+        tokio::time::timeout(Duration::from_secs(10), next_aps(&s.router))
+            .await
+            .expect("router receives the read");
+    assert_eq!((source, cluster), (Nwk(0x0000), 0x0000));
+    // Global read attributes, attribute ids little-endian
+    assert_eq!(data[0], 0x10);
+    assert_eq!(data[2..], [0x00, 0x04, 0x00, 0x05, 0x00]);
+    expect(&mut s.abeille, msg::APS_ACK).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_coordinator_answers_zdo_requests_itself() {
+    let s = setup("zdo-server").await;
+
+    // The router asks for the coordinator's node descriptor
+    s.router
+        .send_aps_unicast(
+            Nwk(0x0000),
+            0x0000,
+            0x0002,
+            0,
+            0,
+            ApsAck::None,
+            30,
+            vec![0x55, 0x00, 0x00],
+            None,
+            false,
+            TxPriority::UserNormal,
+            RouteDirective::StackDecides,
+        )
+        .unwrap();
+
+    let response = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            for n in s.router.next_notifications().await {
+                if let ZigbeeNotification::ReceivedApsCommand {
+                    profile_id: 0x0000,
+                    cluster_id: 0x8002,
+                    data,
+                    ..
+                } = n
+                {
+                    return data;
+                }
+            }
+        }
+    })
+    .await
+    .expect("Node_Desc_rsp from the coordinator");
+    // seq, success, nwk 0000, then a coordinator descriptor with NXP's manufacturer code
+    assert_eq!(response[..4], [0x55, 0x00, 0x00, 0x00]);
+    assert_eq!(response[4..9], [0x00, 0x40, 0x8F, 0x37, 0x10]);
 }

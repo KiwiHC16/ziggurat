@@ -15,8 +15,9 @@ use ziggurat_ieee_802154::types::{Eui64, Nwk};
 use ziggurat_phy::RadioPhy;
 
 use crate::frame::Message;
-use crate::msg;
-use crate::state::{NetworkState, eui_to_u64};
+use crate::native::{self, Target, Translation};
+use crate::state::{NetworkState, eui_from_u64, eui_to_u64};
+use crate::{msg, zdo};
 
 /// LQI byte appended to messages that do not come from the air
 const LOCAL_LQI: u8 = 0xFF;
@@ -27,6 +28,7 @@ const SAVE_INTERVAL: Duration = Duration::from_secs(60);
 const PROFILE_ZDO: u16 = 0x0000;
 const ZDO_DEVICE_ANNCE: u16 = 0x0013;
 const ZDO_MGMT_PERMIT_JOINING_REQ: u16 = 0x0036;
+const ZDO_MGMT_LQI_RSP: u16 = 0x8031;
 const BROADCAST_ROUTERS: Nwk = Nwk(0xFFFC);
 const DEFAULT_RADIUS: u8 = 30;
 
@@ -79,6 +81,7 @@ pub struct Bridge<P: RadioPhy> {
     /// Tag matching a 0x8000 to its later 0x8011 (Abeille's `sqnAps`)
     aps_tag: AtomicU8,
     zdo_seq: AtomicU8,
+    zcl_seq: AtomicU8,
     permit_join_until: Mutex<Option<Instant>>,
     /// Abeille's clock (0x0016) minus ours, in seconds
     clock_offset: Mutex<i64>,
@@ -105,6 +108,7 @@ impl<P: RadioPhy> Bridge<P> {
             sqn: AtomicU8::new(0),
             aps_tag: AtomicU8::new(0),
             zdo_seq: AtomicU8::new(0),
+            zcl_seq: AtomicU8::new(0),
             permit_join_until: Mutex::new(None),
             clock_offset: Mutex::new(0),
             tx_power: Mutex::new(tx_power),
@@ -280,8 +284,14 @@ impl<P: RadioPhy> Bridge<P> {
             | msg::RESET
             | msg::GET_DEVICE_LIST => self.reply_status(STATUS_OK, sqn, request),
             other => {
-                tracing::info!("Unhandled ZiGate command {other:04X}");
-                self.reply_status(STATUS_UNHANDLED_COMMAND, sqn, request);
+                let mut ctx = NativeContext { bridge: self };
+                match native::translate(request, &mut ctx) {
+                    Some(translation) => self.native(sqn, request, translation),
+                    None => {
+                        tracing::info!("Unhandled ZiGate command {other:04X}");
+                        self.reply_status(STATUS_UNHANDLED_COMMAND, sqn, request);
+                    }
+                }
             }
         }
     }
@@ -315,60 +325,104 @@ impl<P: RadioPhy> Bridge<P> {
         let radius = if radius == 0 { DEFAULT_RADIUS } else { radius };
         let data = data.to_vec();
 
-        let (sent, aps_ack) = match mode {
-            ADDR_SHORT | ADDR_SHORT_NO_ACK => {
-                let ack = mode == ADDR_SHORT;
-                let result = self.stack.send_aps_unicast(
-                    Nwk(dst),
-                    profile,
-                    cluster,
-                    src_ep,
-                    dst_ep,
-                    if ack { ApsAck::Request } else { ApsAck::None },
-                    radius,
-                    data,
-                    None,
-                    false,
-                    TxPriority::UserNormal,
-                    RouteDirective::StackDecides,
-                );
-                (result, ack)
-            }
-            ADDR_GROUP => (
-                self.stack.send_aps_groupcast(
-                    dst,
-                    profile,
-                    cluster,
-                    src_ep,
-                    radius,
-                    data,
-                    TxPriority::UserNormal,
-                ),
-                false,
-            ),
-            ADDR_BROADCAST => (
-                self.stack.send_aps_broadcast(
-                    Nwk(dst),
-                    profile,
-                    cluster,
-                    src_ep,
-                    dst_ep,
-                    radius,
-                    data,
-                    TxPriority::UserNormal,
-                ),
-                false,
-            ),
+        let target = match mode {
+            ADDR_SHORT => Target::Unicast {
+                nwk: dst,
+                aps_ack: true,
+            },
+            ADDR_SHORT_NO_ACK => Target::Unicast {
+                nwk: dst,
+                aps_ack: false,
+            },
+            ADDR_GROUP => Target::Group(dst),
+            ADDR_BROADCAST => Target::Broadcast(dst),
             other => {
                 tracing::info!("0530 addressing mode {other:02X} not supported");
                 return self.reply_status(STATUS_BAD_PARAMETER, sqn, request);
             }
         };
+        self.send_frame(
+            sqn,
+            request,
+            &native::Frame {
+                target,
+                profile,
+                cluster,
+                src_ep,
+                dst_ep,
+                asdu: data,
+            },
+            radius,
+        );
+    }
+
+    /// Send a frame for a command, then reply 0x8000 (with the tag 0x8011 will carry)
+    fn send_frame(self: &Arc<Self>, sqn: u8, request: &Message, frame: &native::Frame, radius: u8) {
+        let native::Frame {
+            target,
+            profile,
+            cluster,
+            src_ep,
+            dst_ep,
+            ref asdu,
+        } = *frame;
+        let asdu = asdu.clone();
+        let (sent, aps_ack, dst) = match target {
+            Target::Unicast { nwk, aps_ack } => (
+                self.stack.send_aps_unicast(
+                    Nwk(nwk),
+                    profile,
+                    cluster,
+                    src_ep,
+                    dst_ep,
+                    if aps_ack {
+                        ApsAck::Request
+                    } else {
+                        ApsAck::None
+                    },
+                    radius,
+                    asdu,
+                    None,
+                    false,
+                    TxPriority::UserNormal,
+                    RouteDirective::StackDecides,
+                ),
+                aps_ack,
+                nwk,
+            ),
+            Target::Group(group) => (
+                self.stack.send_aps_groupcast(
+                    group,
+                    profile,
+                    cluster,
+                    src_ep,
+                    radius,
+                    asdu,
+                    TxPriority::UserNormal,
+                ),
+                false,
+                group,
+            ),
+            Target::Broadcast(nwk) => (
+                self.stack.send_aps_broadcast(
+                    Nwk(nwk),
+                    profile,
+                    cluster,
+                    src_ep,
+                    dst_ep,
+                    radius,
+                    asdu,
+                    TxPriority::UserNormal,
+                ),
+                false,
+                nwk,
+            ),
+        };
 
         let handle = match sent {
             Ok(handle) => handle,
             Err(e) => {
-                tracing::warn!("0530 to {dst:04X} rejected: {e:?}");
+                tracing::warn!("{:04X} to {dst:04X} rejected: {e:?}", request.msg_type);
                 return self.reply_status(STATUS_COMMAND_FAILED, sqn, request);
             }
         };
@@ -376,6 +430,52 @@ impl<P: RadioPhy> Bridge<P> {
         let tag = self.aps_tag.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
         self.emit(msg::status(STATUS_OK, sqn, request.msg_type, true, tag));
         self.track(handle, aps_ack, dst, src_ep, dst_ep, cluster, tag);
+    }
+
+    /// A native ZiGate command: translated to a ZDO/ZCL frame, or answered locally
+    fn native(self: &Arc<Self>, sqn: u8, request: &Message, translation: Translation) {
+        match translation {
+            Translation::Send(frame) => self.send_frame(sqn, request, &frame, DEFAULT_RADIUS),
+            Translation::LocalNeighborTable { start_index } => {
+                self.reply_status(STATUS_OK, sqn, request);
+                let seq = self.zdo_seq.fetch_add(1, Ordering::Relaxed);
+                let asdu = zdo::local_neighbor_table(&self.stack, seq, start_index);
+                self.emit(msg::data_indication(&msg::Indication {
+                    profile: PROFILE_ZDO,
+                    cluster: ZDO_MGMT_LQI_RSP,
+                    src_ep: 0,
+                    dst_ep: 0,
+                    src_nwk: 0x0000,
+                    dst_nwk: 0x0000,
+                    dst_group: None,
+                    asdu: &asdu,
+                }));
+            }
+            Translation::LocalBind => self.reply_status(STATUS_OK, sqn, request),
+            Translation::UnknownDevice(ieee) => {
+                tracing::info!(
+                    "{:04X}: device {ieee:016X} is not in the address map",
+                    request.msg_type
+                );
+                self.reply_status(STATUS_COMMAND_FAILED, sqn, request);
+            }
+            Translation::Malformed => {
+                tracing::info!(
+                    "Malformed {:04X}: {}",
+                    request.msg_type,
+                    crate::hex(&request.payload)
+                );
+                self.reply_status(STATUS_BAD_PARAMETER, sqn, request);
+            }
+            Translation::Unsupported => {
+                tracing::info!(
+                    "Unsupported {:04X}: {}",
+                    request.msg_type,
+                    crate::hex(&request.payload)
+                );
+                self.reply_status(STATUS_UNHANDLED_COMMAND, sqn, request);
+            }
+        }
     }
 
     /// Report the outcome of a send: 0x8011 when Abeille waits for an APS ack, 0x8702
@@ -473,6 +573,8 @@ impl<P: RadioPhy> Bridge<P> {
                 );
                 if profile_id == PROFILE_ZDO && cluster_id == ZDO_DEVICE_ANNCE {
                     self.device_announce(&data, lqi);
+                } else if profile_id == PROFILE_ZDO && dst_ep == 0 && cluster_id < 0x8000 {
+                    self.answer_zdo(source, destination, cluster_id, &data);
                 }
             }
             ZigbeeNotification::DeviceJoined { nwk, ieee, .. } => {
@@ -517,5 +619,64 @@ impl<P: RadioPhy> Bridge<P> {
             lqi,
         );
         self.save();
+    }
+
+    /// The coordinator's own ZDO server (descriptors, address and match requests)
+    fn answer_zdo(&self, source: Nwk, destination: Nwk, cluster: u16, data: &[u8]) {
+        let Ok(coordinator) = self.state.lock().expect("state lock").coordinator() else {
+            return;
+        };
+        let Some(response) = zdo::answer(source.0, destination.0, cluster, data, coordinator)
+        else {
+            return;
+        };
+        tracing::debug!(
+            "ZDO {cluster:04X} from {:04X}: answering {:04X}",
+            source.0,
+            response.cluster
+        );
+        if let Err(e) = self.stack.send_aps_unicast(
+            Nwk(response.to),
+            PROFILE_ZDO,
+            response.cluster,
+            0,
+            0,
+            ApsAck::None,
+            DEFAULT_RADIUS,
+            response.asdu,
+            None,
+            false,
+            TxPriority::UserNormal,
+            RouteDirective::StackDecides,
+        ) {
+            tracing::warn!("ZDO response to {:04X} rejected: {e:?}", source.0);
+        }
+    }
+}
+
+/// What native command translation needs from the bridge
+struct NativeContext<'a, P: RadioPhy> {
+    bridge: &'a Bridge<P>,
+}
+
+impl<P: RadioPhy> native::Context for NativeContext<'_, P> {
+    fn next_zdo_seq(&mut self) -> u8 {
+        self.bridge.zdo_seq.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn next_zcl_seq(&mut self) -> u8 {
+        self.bridge.zcl_seq.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn nwk_of(&self, ieee: u64) -> Option<u16> {
+        let ieee = eui_from_u64(ieee);
+        ziggurat_protocol::address_entries(&self.bridge.stack)
+            .into_iter()
+            .find(|entry| entry.ieee == ieee)
+            .map(|entry| entry.nwk.0)
+    }
+
+    fn coordinator_ieee(&self) -> u64 {
+        self.bridge.coordinator_ieee()
     }
 }

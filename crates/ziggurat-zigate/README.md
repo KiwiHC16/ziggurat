@@ -25,7 +25,9 @@ Jeedom / Abeille ──socat──TCP 20108──▶ ziggurat-zigate ──Spine
 | Mode `observe` (sans radio) | fait : décode et journalise ce qu'envoie Abeille, répond à la poignée de main |
 | Simulateur de clé (`crates/ziggurat-sim`) | fait, testé avec la pile complète |
 | Mode `run` : pile Ziggurat, persistance (`state.rs`), 0530 → APS, 8000/8011 avec `sqnAps`, 8002, 004D, 8048, inclusion 0049/0014, 0009/0016/0017/0806/0807 | fait, testé sur le simulateur et avec Abeille réel (03/10) |
-| Commandes natives (0100, 0045, 0043, 0042, 0041, 0030…) et ZDO du coordinateur | à faire (étape 3) ; répondues 8000 statut 02 pour l'instant |
+| Commandes natives (`native.rs`) : ZDO 0040/0041/0042/0043/0045/004E/0030/0031/0047/004C, ZCL 0100/0110/0122/0140/0092/0093/0081/0082/0084/00B7/00C0/0070/0060/0062/0063/0064/00FA, encodées comme le firmware 3.23 | fait, testé (03/10) |
+| Serveur ZDO du coordinateur (`zdo.rs`) : NWK/IEEE_addr, Node/Power/Simple_Desc, Active_EP, Match_Desc, Mgmt_Lqi local (004E vers 0000) | fait, testé (03/10) |
+| Appareils simulés qui répondent en ZDO/ZCL, pour l'identification complète par Abeille | à faire (étape 4) |
 
 ## Lancer
 

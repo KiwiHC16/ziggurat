@@ -167,12 +167,22 @@ impl NetworkState {
         }
     }
 
-    /// Write to a temporary file, flush it to disk, then rename over the old state
+    /// Write to a temporary file, flush it to disk, then rename over the old state.
+    /// The file holds the network key: it is readable by its owner only.
     pub fn save(&self, path: &Path) -> Result<()> {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
         let tmp = path.with_extension("json.tmp");
         {
-            let mut file = std::fs::File::create(&tmp)
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)
                 .with_context(|| format!("creating {}", tmp.display()))?;
+            // `mode` only applies to new files: fix a leftover temporary file too
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
             file.write_all(&serde_json::to_vec_pretty(self)?)?;
             file.sync_all()?;
         }
@@ -337,6 +347,15 @@ mod tests {
         state.save(&path).unwrap();
         let loaded = NetworkState::load(&path).unwrap().unwrap();
         assert_eq!(loaded, state);
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(
+                mode & 0o777,
+                0o600,
+                "network key must not be world-readable"
+            );
+        }
 
         let config = loaded.network_config().unwrap();
         assert_eq!(config.channel, 25);

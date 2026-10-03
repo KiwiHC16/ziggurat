@@ -33,6 +33,7 @@ Pilotage d'Abeille en ligne de commande, en `www-data` :
 | `abeille_list_gtw2.php` | Liste les équipements de la ZiGate 2 et leur modèle |
 | `abeille_eq_info.php` | Détail d'un équipement (modèle, infos Zigbee, commandes) — adresse à adapter |
 | `abeille_plug_on.php` | Allume la prise simulée et relit l'état |
+| `abeille_stdin.php` | Lit des lignes `sujet|paramètres` sur l'entrée standard et les passe à Abeille (`msgToCmd`), ex. `CmdAbeille2/8734/readAttribute|ep=01&clustId=0001&attrId=0020,0021`. Envoyer tout d'un bloc : Abeille enchaîne les requêtes, y compris vers un appareil sur pile pendant ses réveils |
 
 ## `wireshark/`
 

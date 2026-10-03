@@ -28,12 +28,19 @@ Pilotage d'Abeille en ligne de commande, en `www-data` :
 | `abeille_state.php` | État de la prise et appuis de la télécommande |
 | `abeille_check.php` | IEEE retenue et informations de la ZiGate 1 |
 | `abeille_reset_ieee.php` | Oublie l'IEEE de la ZiGate 1 et relance le démon |
+| `abeille_setup.php` | Active Abeille et configure la ZiGate 1 en WIFI sur 127.0.0.1:20108 (simulateur) |
+| `abeille_gtw2.php` | Configure la ZiGate 2 en WIFI sur 127.0.0.1:20109 (clé MG24 réelle) |
+| `abeille_list_gtw2.php` | Liste les équipements de la ZiGate 2 et leur modèle |
+| `abeille_eq_info.php` | Détail d'un équipement (modèle, infos Zigbee, commandes) — adresse à adapter |
+| `abeille_plug_on.php` | Allume la prise simulée et relit l'état |
 
 ## `wireshark/`
 
 - `colorfilters-butineuse` : les couleurs du plugin Butineuse (`zb.lua`) en règles
   permanentes (plus la Route Request, `zbee_nwk.cmd.id == 0x01`, en jaune clair), à placer en tête de `~/.config/wireshark/colorfilters`. Format :
   `@nom@filtre@[fond][texte]`, composantes sur 16 bits.
+- `Zigbee réel.command` : idem pour la sonde de la passerelle sur la clé MG24 réelle
+  (port 17761, `--capture`).
 - `Zigbee simulé.command` : lanceur macOS. Relaie la capture de `ziggurat-sim`
   (port 17760) dans un FIFO et ouvre Wireshark dessus (l'interface graphique ne démarre
   pas sur `-i TCP@…`).

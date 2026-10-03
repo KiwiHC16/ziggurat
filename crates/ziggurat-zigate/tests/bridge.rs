@@ -568,3 +568,117 @@ async fn abeille_identifies_a_simulated_plug() {
         }
     }
 }
+
+/// A simulated IKEA remote drives a simulated plug through a group set up by Abeille
+#[tokio::test(start_paused = true)]
+async fn remote_switches_a_plug_through_a_group() {
+    use ziggurat_sim::device::{Model, SimDevice};
+
+    const PLUG_NWK: u16 = 0x1A01;
+    const REMOTE_NWK: u16 = 0x1A02;
+    const GROUP: u16 = 0x7A01;
+
+    let dir = std::env::temp_dir().join(format!("zigate-group-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let state_path = dir.join("network.json");
+
+    let medium = Medium::new(11);
+    let coordinator_node = medium.add_node("coordinator", COORDINATOR_IEEE);
+    let bridge = start_bridge(
+        Arc::new(SimPhy::new(medium.clone(), coordinator_node)),
+        COORDINATOR_IEEE,
+        &config(state_path.clone()),
+    )
+    .await
+    .unwrap();
+    let (tx, mut abeille) = mpsc::unbounded_channel();
+    bridge.attach(tx);
+
+    let network = || {
+        NetworkState::load(&state_path)
+            .unwrap()
+            .unwrap()
+            .network_config()
+            .unwrap()
+    };
+    let plug_ieee = Eui64([0x01, 0, 0, 0, 0, 0x38, 0xC1, 0xA4]);
+    let remote_ieee = Eui64([0x01, 0, 0, 0xFE, 0xFF, 0x72, 0x02, 0x5C]);
+    let plug_node = medium.add_node("plug", plug_ieee);
+    let remote_node = medium.add_node("remote", remote_ieee);
+    let plug = SimDevice::start(
+        Arc::new(SimPhy::new(medium.clone(), plug_node)),
+        network(),
+        plug_ieee,
+        Nwk(PLUG_NWK),
+        Model::blitzwolf_plug(),
+    )
+    .await
+    .unwrap();
+    let remote = SimDevice::start(
+        Arc::new(SimPhy::new(medium, remote_node)),
+        network(),
+        remote_ieee,
+        Nwk(REMOTE_NWK),
+        Model::ikea_remote(GROUP),
+    )
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_secs(40)).await;
+
+    // Abeille's addGroup: 0060 mode 02, plug, ep 01 → 01, group
+    let mut payload = vec![0x02];
+    payload.extend(PLUG_NWK.to_be_bytes());
+    payload.extend([0x01, 0x01]);
+    payload.extend(GROUP.to_be_bytes());
+    bridge.handle(&Message {
+        msg_type: msg::ADD_GROUP,
+        payload,
+    });
+    expect(&mut abeille, msg::APS_ACK).await;
+    assert_eq!(plug.groups(), [GROUP]);
+
+    // Abeille then reads the membership back
+    let mut payload = vec![0x02];
+    payload.extend(PLUG_NWK.to_be_bytes());
+    payload.extend([0x01, 0x01, 0x00]);
+    bridge.handle(&Message {
+        msg_type: msg::GET_GROUP_MEMBERSHIP,
+        payload,
+    });
+    loop {
+        let (m, _) = expect(&mut abeille, msg::DATA_INDICATION).await;
+        // The Add Group Response (command 00) comes first; wait for command 02
+        if m.payload[3..5] == [0x00, 0x04] && m.payload[13 + 2] == 0x02 {
+            // FCF seq 02 capacity count=1 group(LE)
+            assert_eq!(m.payload[13 + 2..], [0x02, 0xFE, 0x01, 0x01, 0x7A]);
+            break;
+        }
+    }
+
+    // Button On: the remote's groupcast is seen by Abeille (group destination) and the
+    // plug switches on and reports it
+    remote.press(0x01).unwrap();
+    let mut saw_remote = false;
+    let mut saw_report = false;
+    while !(saw_remote && saw_report) {
+        let (m, _) = expect(&mut abeille, msg::DATA_INDICATION).await;
+        let src = u16::from_be_bytes([m.payload[8], m.payload[9]]);
+        if src == REMOTE_NWK && m.payload[3..5] == [0x00, 0x06] {
+            // Destination mode 01 (group) 7A01, command On
+            assert_eq!(m.payload[10..13], [0x01, 0x7A, 0x01]);
+            assert_eq!(m.payload[13 + 2], 0x01);
+            saw_remote = true;
+        }
+        if src == PLUG_NWK && m.payload[3..5] == [0x00, 0x06] && m.payload[13 + 2] == 0x0A {
+            assert_eq!(m.payload[13 + 3..], [0x00, 0x00, 0x10, 0x01]);
+            saw_report = true;
+        }
+    }
+    assert!(plug.attribute(1, 0x0006, 0x0000).unwrap().value == [1]);
+
+    // Button Off
+    remote.press(0x00).unwrap();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(plug.attribute(1, 0x0006, 0x0000).unwrap().value == [0]);
+}

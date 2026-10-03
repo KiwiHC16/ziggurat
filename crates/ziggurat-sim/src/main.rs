@@ -6,6 +6,11 @@
 //!
 //! # With two simulated BlitzWolf plugs on the network of a ziggurat-zigate bridge
 //! ziggurat-sim --network-state network.json --plug A4C1380000000001:1A01 --plug A4C1380000000002:1A02
+//!
+//! # A plug and an IKEA on/off remote driving group 7A01; buttons through the control port
+//! ziggurat-sim --network-state network.json --plug A4C1380000000001:1A01 \\
+//!     --remote 5C0272FFFE000001:1A02:7A01
+//! echo "1A02 on" | nc -q1 127.0.0.1 9001
 //! ```
 
 use std::net::SocketAddr;
@@ -47,6 +52,16 @@ struct Args {
     /// A simulated BlitzWolf BW-SHP13 plug, as `IEEE:NWK` in hex (repeatable)
     #[arg(long, value_name = "IEEE:NWK")]
     plug: Vec<String>,
+
+    /// A simulated IKEA TRADFRI on/off remote, as `IEEE:NWK:GROUP` in hex: its buttons
+    /// send On/Off to that group (repeatable)
+    #[arg(long, value_name = "IEEE:NWK:GROUP")]
+    remote: Vec<String>,
+
+    /// Control port: `list`, `<nwk> on|off|toggle` (remote buttons, or the plug's own
+    /// button), `<nwk> announce`
+    #[arg(long, default_value = "127.0.0.1:9001")]
+    control: SocketAddr,
 
     /// Announce the devices this many seconds after start, without waiting for the
     /// coordinator to open joins
@@ -95,6 +110,96 @@ fn network_from_state(path: &PathBuf) -> Result<NetworkConfig> {
     })
 }
 
+/// Line protocol for pressing buttons from a shell (`nc`)
+async fn control(listen: SocketAddr, devices: Vec<Arc<SimDevice>>) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    let listener = match TcpListener::bind(listen).await {
+        Ok(listener) => listener,
+        Err(e) => {
+            tracing::warn!("Control port {listen} unavailable: {e}");
+            return;
+        }
+    };
+    tracing::info!("Control port on {listen}");
+    loop {
+        let Ok((stream, _)) = listener.accept().await else {
+            continue;
+        };
+        let devices = devices.clone();
+        tokio::spawn(async move {
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let reply = control_command(&devices, line.trim());
+                if writer
+                    .write_all(format!("{reply}\n").as_bytes())
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+    }
+}
+
+fn control_command(devices: &[Arc<SimDevice>], line: &str) -> String {
+    let words: Vec<&str> = line.split_whitespace().collect();
+    match words.as_slice() {
+        ["list"] => devices
+            .iter()
+            .map(|d| {
+                let state = d
+                    .attribute(1, 0x0006, 0x0000)
+                    .map(|a| if a.value == [0] { " off" } else { " on" })
+                    .unwrap_or_default();
+                format!(
+                    "{:04X} {} groups={:04X?}{state}",
+                    d.nwk.0,
+                    d.model_name(),
+                    d.groups()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        [nwk, action] => {
+            let Ok(nwk) = u16::from_str_radix(nwk, 16) else {
+                return format!("bad address {nwk}");
+            };
+            let Some(device) = devices.iter().find(|d| d.nwk.0 == nwk) else {
+                return format!("no device {nwk:04X}");
+            };
+            let command = match *action {
+                "off" => 0x00,
+                "on" => 0x01,
+                "toggle" => 0x02,
+                "announce" => {
+                    device.announce();
+                    return "ok".into();
+                }
+                other => return format!("unknown action {other}"),
+            };
+            let result = if device.model_name() == "TRADFRIonoffswitch" {
+                device.press(command)
+            } else {
+                // The plug's own button
+                let on = match command {
+                    0x00 => false,
+                    0x01 => true,
+                    _ => device
+                        .attribute(1, 0x0006, 0x0000)
+                        .is_some_and(|a| a.value == [0]),
+                };
+                device.set_on_off(1, on);
+                Ok(())
+            };
+            result.map_or_else(|e| format!("error: {e}"), |()| "ok".into())
+        }
+        _ => "commands: list | <nwk> on|off|toggle|announce".into(),
+    }
+}
+
 fn parse_plug(spec: &str) -> Result<(Eui64, Nwk)> {
     let (ieee, nwk) = spec
         .split_once(':')
@@ -119,15 +224,33 @@ async fn main() -> Result<()> {
     let dongle = medium.add_node("dongle", hw);
 
     let mut devices = Vec::new();
-    if !args.plug.is_empty() {
+    if !args.plug.is_empty() || !args.remote.is_empty() {
         let path = args
             .network_state
             .as_ref()
-            .context("--plug needs --network-state")?;
+            .context("--plug/--remote need --network-state")?;
         let network = network_from_state(path)?;
+        let mut specs: Vec<(String, Eui64, Nwk, Model)> = Vec::new();
         for spec in &args.plug {
             let (ieee, nwk) = parse_plug(spec)?;
-            let node = medium.add_node(format!("plug {spec}"), ieee);
+            specs.push((format!("plug {spec}"), ieee, nwk, Model::blitzwolf_plug()));
+        }
+        for spec in &args.remote {
+            let (device, group) = spec
+                .rsplit_once(':')
+                .with_context(|| format!("--remote {spec}: expected IEEE:NWK:GROUP"))?;
+            let (ieee, nwk) = parse_plug(device)?;
+            let group =
+                u16::from_str_radix(group, 16).with_context(|| format!("--remote {spec}"))?;
+            specs.push((
+                format!("remote {spec}"),
+                ieee,
+                nwk,
+                Model::ikea_remote(group),
+            ));
+        }
+        for (name, ieee, nwk, model) in specs {
+            let node = medium.add_node(name.clone(), ieee);
             let phy = Arc::new(SimPhy::new(medium.clone(), node));
             let template = NetworkConfig {
                 network_key: network.network_key.clone(),
@@ -135,15 +258,16 @@ async fn main() -> Result<()> {
                 tclk_seed: None,
                 ..network
             };
-            let device =
-                SimDevice::start(phy, template, ieee, nwk, Model::blitzwolf_plug()).await?;
-            if args.report_interval > 0 {
+            let is_plug = model.target_group.is_none();
+            let device = SimDevice::start(phy, template, ieee, nwk, model).await?;
+            if is_plug && args.report_interval > 0 {
                 device.spawn_periodic_reports(Duration::from_secs(args.report_interval));
             }
-            tracing::info!("Simulated plug {spec} on channel {}", network.channel);
+            tracing::info!("Simulated {name} on channel {}", network.channel);
             devices.push(device);
         }
     }
+    tokio::spawn(control(args.control, devices.clone()));
     if let Some(delay) = args.announce_after {
         let devices: Vec<Arc<SimDevice>> = devices.clone();
         tokio::spawn(async move {

@@ -5,7 +5,7 @@
 //! network and send a Device_annce when the coordinator opens joins, which starts the
 //! same interrogation a fresh join would.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -80,6 +80,10 @@ pub struct Endpoint {
 pub struct Model {
     pub name: &'static str,
     pub manufacturer_code: u16,
+    /// MAC capability flags of the Device_annce
+    pub mac_capability: u8,
+    /// For remotes: the group its buttons control
+    pub target_group: Option<u16>,
     pub endpoints: Vec<Endpoint>,
     /// `(endpoint, cluster, attribute)`
     pub attributes: BTreeMap<(u8, u16, u16), Attribute>,
@@ -117,6 +121,9 @@ impl Model {
         Self {
             name: "TS011F__TZ3000_amdymr7l",
             manufacturer_code: 0x1002,
+            // Router, mains powered, receiver on, allocate address
+            mac_capability: 0x8E,
+            target_group: None,
             endpoints: vec![
                 Endpoint {
                     id: 0x01,
@@ -135,6 +142,48 @@ impl Model {
                     clients: vec![0x0021],
                 },
             ],
+            attributes,
+        }
+    }
+
+    /// IKEA TRADFRI on/off switch (E1743), as discovered by Abeille: On/Off buttons that
+    /// send to a group (firmware before 2.3.075 binds to groups only).
+    ///
+    /// The real remote is a sleepy end device; the simulated one runs on a router stack
+    /// (Ziggurat has no end device role) and announces itself as a router.
+    #[must_use]
+    pub fn ikea_remote(group: u16) -> Self {
+        let mut attributes = BTreeMap::new();
+        let mut set = |cluster: u16, attribute: u16, value: Attribute| {
+            attributes.insert((1, cluster, attribute), value);
+        };
+        set(0x0000, 0x0000, Attribute::uint(UINT8, 3, 1));
+        set(0x0000, 0x0001, Attribute::uint(UINT8, 33, 1));
+        set(0x0000, 0x0002, Attribute::uint(UINT8, 98, 1));
+        set(0x0000, 0x0003, Attribute::uint(UINT8, 1, 1));
+        set(0x0000, 0x0004, Attribute::string("IKEA of Sweden"));
+        set(0x0000, 0x0005, Attribute::string("TRADFRI on/off switch"));
+        set(0x0000, 0x0006, Attribute::string("20210722"));
+        // Battery (0x03)
+        set(0x0000, 0x0007, Attribute::uint(ENUM8, 3, 1));
+        set(0x0000, 0x4000, Attribute::string("2.3.070"));
+        set(0x0000, 0xFFFD, Attribute::uint(UINT16, 1, 2));
+        // 2.9 V, 100 % (in half percent)
+        set(0x0001, 0x0020, Attribute::uint(UINT8, 29, 1));
+        set(0x0001, 0x0021, Attribute::uint(UINT8, 200, 1));
+        set(0x0003, 0x0000, Attribute::uint(UINT16, 0, 2));
+        Self {
+            name: "TRADFRIonoffswitch",
+            manufacturer_code: 0x117C,
+            mac_capability: 0x8E,
+            target_group: Some(group),
+            endpoints: vec![Endpoint {
+                id: 0x01,
+                profile: PROFILE_HA,
+                device_id: 0x0820,
+                servers: vec![0x0000, 0x0001, 0x0003, 0x0009, 0x0020, 0x1000, 0xFC7C],
+                clients: vec![0x0003, 0x0004, 0x0006, 0x0008, 0x0019, 0x0102, 0x1000],
+            }],
             attributes,
         }
     }
@@ -174,6 +223,8 @@ pub struct SimDevice {
     pub nwk: Nwk,
     model: Mutex<Model>,
     seq: Mutex<u8>,
+    /// Groups the device's endpoints are members of
+    groups: Mutex<BTreeSet<u16>>,
 }
 
 impl SimDevice {
@@ -205,6 +256,7 @@ impl SimDevice {
             // Away from the client's own counter: Abeille drops a frame whose FCF and
             // sequence number match one received from the same device in the last 2 s
             seq: Mutex::new(0x7F),
+            groups: Mutex::new(BTreeSet::new()),
         });
         let worker = Arc::clone(&device);
         tokio::spawn(async move {
@@ -253,12 +305,28 @@ impl SimDevice {
         }
     }
 
-    /// Device_annce: router, mains powered, receiver on, allocate address
+    #[must_use]
+    pub fn model_name(&self) -> &'static str {
+        self.model.lock().expect("model lock").name
+    }
+
+    #[must_use]
+    pub fn groups(&self) -> Vec<u16> {
+        self.groups
+            .lock()
+            .expect("groups lock")
+            .iter()
+            .copied()
+            .collect()
+    }
+
+    /// Device_annce
     pub fn announce(&self) {
+        let capability = self.model.lock().expect("model lock").mac_capability;
         let mut data = vec![self.next_seq()];
         data.extend(self.nwk.to_bytes());
         data.extend(self.ieee.to_bytes());
-        data.push(0x8E);
+        data.push(capability);
         tracing::info!("Device {:?} announces itself", self.nwk);
         if let Err(e) = self.stack.send_aps_broadcast(
             Nwk(0xFFFD),
@@ -290,9 +358,53 @@ impl SimDevice {
         };
         if profile_id == PROFILE_ZDO && dst_ep == 0 {
             self.zdo(source, cluster_id, &data);
-        } else if group.is_none() {
-            self.zcl(source, profile_id, cluster_id, src_ep, dst_ep, &data);
+        } else if let Some(group) = group {
+            // Group frames carry no endpoint: deliver to the one serving the cluster
+            if self.groups.lock().expect("groups lock").contains(&group) {
+                let ep = self.endpoint_serving(cluster_id);
+                self.zcl(source, profile_id, cluster_id, src_ep, ep, &data, true);
+            }
+        } else {
+            self.zcl(source, profile_id, cluster_id, src_ep, dst_ep, &data, false);
         }
+    }
+
+    fn endpoint_serving(&self, cluster: u16) -> u8 {
+        let model = self.model.lock().expect("model lock");
+        model
+            .endpoints
+            .iter()
+            .find(|e| e.servers.contains(&cluster))
+            .or_else(|| model.endpoints.first())
+            .map_or(1, |e| e.id)
+    }
+
+    /// A button press on a remote: On (01), Off (00) or Toggle (02) to its group
+    pub fn press(&self, command: u8) -> anyhow::Result<()> {
+        let group = self
+            .model
+            .lock()
+            .expect("model lock")
+            .target_group
+            .ok_or_else(|| anyhow::anyhow!("{:?} is not a remote", self.nwk))?;
+        // Cluster-specific, client to server, no default response
+        let frame = vec![0x11, self.next_seq(), command];
+        tracing::info!(
+            "Remote {:?}: button {command:02X} to group {group:04X}",
+            self.nwk
+        );
+        self.stack
+            .send_aps_groupcast(
+                group,
+                PROFILE_HA,
+                0x0006,
+                0x01,
+                RADIUS,
+                frame,
+                TxPriority::UserNormal,
+            )
+            .map(|_| ())
+            .map_err(|e| anyhow::anyhow!("groupcast rejected: {e:?}"))
     }
 
     fn zdo(&self, source: Nwk, cluster: u16, data: &[u8]) {
@@ -363,8 +475,17 @@ impl SimDevice {
         self.send(source, PROFILE_ZDO, cluster | 0x8000, 0, 0, rsp);
     }
 
-    #[allow(clippy::too_many_lines)]
-    fn zcl(&self, source: Nwk, profile: u16, cluster: u16, src_ep: u8, ep: u8, data: &[u8]) {
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+    fn zcl(
+        &self,
+        source: Nwk,
+        profile: u16,
+        cluster: u16,
+        src_ep: u8,
+        ep: u8,
+        data: &[u8],
+        from_group: bool,
+    ) {
         let Some(&control) = data.first() else {
             return;
         };
@@ -389,7 +510,12 @@ impl SimDevice {
         };
         let header = |command: u8| response_header(0x00, command);
         let cluster_header = |command: u8| response_header(0x01, command);
-        let reply = |frame: Vec<u8>| self.send(source, profile, cluster, ep, src_ep, frame);
+        // Group-addressed commands are executed but never answered
+        let reply = |frame: Vec<u8>| {
+            if !from_group {
+                self.send(source, profile, cluster, ep, src_ep, frame);
+            }
+        };
         let default_response = |status: u8| {
             if !disable_default_response || status != SUCCESS {
                 let mut frame = header(0x0B);
@@ -495,19 +621,65 @@ impl SimDevice {
             }
             // Identify
             (0x0003, 0x00) => default_response(SUCCESS),
-            // Groups: add, get membership, remove, remove all
+            // Groups: add (00), remove (03): group(2, LE) [name]
             (0x0004, 0x00 | 0x03) => {
+                let Some(&[lo, hi]) = payload.first_chunk::<2>() else {
+                    return default_response(0x80);
+                };
+                let group = u16::from_le_bytes([lo, hi]);
+                let changed = {
+                    let mut groups = self.groups.lock().expect("groups lock");
+                    if command == 0x00 {
+                        groups.insert(group)
+                    } else {
+                        groups.remove(&group)
+                    }
+                };
+                tracing::info!(
+                    "Device {:?}: {} group {group:04X}",
+                    self.nwk,
+                    if command == 0x00 {
+                        "added to"
+                    } else {
+                        "removed from"
+                    }
+                );
                 let mut frame = cluster_header(command);
-                frame.push(SUCCESS);
-                frame.extend(payload.get(..2).unwrap_or(&[0, 0]));
+                // NOT_FOUND (0x8B) when removing a group we are not in
+                frame.push(if changed || command == 0x00 {
+                    SUCCESS
+                } else {
+                    0x8B
+                });
+                frame.extend([lo, hi]);
                 reply(frame);
             }
+            // Get group membership: count, groups(2 each); an empty list asks for all
             (0x0004, 0x02) => {
+                let asked: Vec<u16> = payload
+                    .get(1..)
+                    .unwrap_or_default()
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|&g| u16::from_le_bytes(g))
+                    .collect();
+                let groups: Vec<u16> = self
+                    .groups()
+                    .into_iter()
+                    .filter(|g| asked.is_empty() || asked.contains(g))
+                    .collect();
                 let mut frame = cluster_header(0x02);
-                frame.extend([0xFF, 0x00]);
+                // Remaining capacity, then the list
+                frame.push(0xFE);
+                frame.push(u8::try_from(groups.len()).unwrap_or(0));
+                frame.extend(groups.iter().flat_map(|g| g.to_le_bytes()));
                 reply(frame);
             }
-            (0x0004, 0x04) => default_response(SUCCESS),
+            (0x0004, 0x04) => {
+                self.groups.lock().expect("groups lock").clear();
+                default_response(SUCCESS);
+            }
             _ => default_response(UNSUP_CLUSTER_COMMAND),
         }
     }

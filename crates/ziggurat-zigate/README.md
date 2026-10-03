@@ -28,6 +28,7 @@ Jeedom / Abeille ──socat──TCP 20108──▶ ziggurat-zigate ──Spine
 | Commandes natives (`native.rs`) : ZDO 0040/0041/0042/0043/0045/004E/0030/0031/0047/004C, ZCL 0100/0110/0122/0140/0092/0093/0081/0082/0084/00B7/00C0/0070/0060/0062/0063/0064/00FA, encodées comme le firmware 3.23 | fait, testé (03/10) |
 | Serveur ZDO du coordinateur (`zdo.rs`) : NWK/IEEE_addr, Node/Power/Simple_Desc, Active_EP, Match_Desc, Mgmt_Lqi local (004E vers 0000) | fait, testé (03/10) |
 | Appareils simulés (`ziggurat-sim --plug`) : prise BlitzWolf BW-SHP13 (TS011F `_TZ3000_amdymr7l`) qui répond en ZDO/ZCL | fait (03/10) : Abeille réel l'inclut, la reconnaît, la configure et la pilote (Off/On/Toggle, état, courant, puissance) |
+| Télécommande simulée (`ziggurat-sim --remote IEEE:NWK:GROUPE`) : IKEA TRADFRI on/off (E1743) qui commande un groupe ; table de groupes des appareils simulés | fait (03/10) : Abeille l'inclut ; la prise ajoutée au groupe 7A01 par Abeille suit les appuis On/Off |
 | Inclusion réelle d'un appareil (association, transport de clé) | non simulée : Ziggurat n'a pas de côté « joiner », les appareils simulés démarrent déjà sur le réseau |
 
 ## Lancer
@@ -179,6 +180,11 @@ cargo run -p ziggurat-sim -- --listen 127.0.0.1:9000
 
 # Avec une prise simulée sur le réseau de la passerelle (s'annonce à l'ouverture de l'inclusion)
 cargo run -p ziggurat-sim -- --network-state network.json --plug A4C1380000000001:1A01
+
+# Plus une télécommande IKEA qui commande le groupe 7A01, et ses boutons
+cargo run -p ziggurat-sim -- --network-state network.json --plug A4C1380000000001:1A01 \
+    --remote 5C0272FFFE000001:1A02:7A01
+echo "1A02 on" | nc -q1 127.0.0.1 9001     # aussi : off, toggle, announce ; « list »
 ```
 
 Les tests de bout en bout couvrent : démarrage de la pile sur la fausse clé Spinel, envoi APS

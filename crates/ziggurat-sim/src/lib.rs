@@ -4,7 +4,10 @@
 //! - [`phy::SimPhy`]: a [`ziggurat_phy::RadioPhy`] on that air, to run stacks in-process
 //! - [`rcp::serve`]: a simulated OpenThread RCP speaking Spinel, a drop-in for the real
 //!   dongle behind `--device tcp://…`
+//! - [`device::SimDevice`]: simulated devices (a router stack plus the device's ZDO/ZCL
+//!   behavior) to exercise a client end to end
 
+pub mod device;
 pub mod medium;
 pub mod phy;
 pub mod rcp;

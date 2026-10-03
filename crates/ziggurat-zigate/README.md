@@ -27,7 +27,8 @@ Jeedom / Abeille ──socat──TCP 20108──▶ ziggurat-zigate ──Spine
 | Mode `run` : pile Ziggurat, persistance (`state.rs`), 0530 → APS, 8000/8011 avec `sqnAps`, 8002, 004D, 8048, inclusion 0049/0014, 0009/0016/0017/0806/0807 | fait, testé sur le simulateur et avec Abeille réel (03/10) |
 | Commandes natives (`native.rs`) : ZDO 0040/0041/0042/0043/0045/004E/0030/0031/0047/004C, ZCL 0100/0110/0122/0140/0092/0093/0081/0082/0084/00B7/00C0/0070/0060/0062/0063/0064/00FA, encodées comme le firmware 3.23 | fait, testé (03/10) |
 | Serveur ZDO du coordinateur (`zdo.rs`) : NWK/IEEE_addr, Node/Power/Simple_Desc, Active_EP, Match_Desc, Mgmt_Lqi local (004E vers 0000) | fait, testé (03/10) |
-| Appareils simulés qui répondent en ZDO/ZCL, pour l'identification complète par Abeille | à faire (étape 4) |
+| Appareils simulés (`ziggurat-sim --plug`) : prise BlitzWolf BW-SHP13 (TS011F `_TZ3000_amdymr7l`) qui répond en ZDO/ZCL | fait (03/10) : Abeille réel l'inclut, la reconnaît, la configure et la pilote (Off/On/Toggle, état, courant, puissance) |
+| Inclusion réelle d'un appareil (association, transport de clé) | non simulée : Ziggurat n'a pas de côté « joiner », les appareils simulés démarrent déjà sur le réseau |
 
 ## Lancer
 
@@ -128,6 +129,15 @@ Source : `crates/ziggurat-driver`, `crates/ziggurat-server`, `crates/ziggurat-pr
   (Ok → 00, `ApsAckTimeout` → A7) ; NwkNoAck → E9, CcaFailure → E1, routes → D0, IndirectExpired → F0.
 - Le lecteur Spinel fait `process::exit(1)` si la liaison série tombe : lancer sous systemd.
 
+### Comportements de Ziggurat à connaître
+
+- **Après un démarrage, ~30 s sans unicast vers les routeurs.** Un routeur ne répond à une
+  recherche de route que s'il connaît son coût de liaison vers l'émetteur, appris par les
+  link status (période 15 s, il en faut deux). Avant, la recherche de route échoue et
+  l'accusé APS expire (8011 A7), même pour un voisin direct. La passerelle n'accepte donc
+  Abeille qu'après `--warm-up` (35 s). Piste à remonter au projet Ziggurat (un voisin direct
+  pourrait être joint sans attendre le coût).
+
 ## Plan
 
 1. **Observer** (sans clé) : `observe` sur la VM, une ZiGate WiFi de test dans Abeille
@@ -166,6 +176,9 @@ Source : `crates/ziggurat-driver`, `crates/ziggurat-server`, `crates/ziggurat-pr
 ```bash
 cargo test -p ziggurat-sim -p ziggurat-zigate
 cargo run -p ziggurat-sim -- --listen 127.0.0.1:9000
+
+# Avec une prise simulée sur le réseau de la passerelle (s'annonce à l'ouverture de l'inclusion)
+cargo run -p ziggurat-sim -- --network-state network.json --plug A4C1380000000001:1A01
 ```
 
 Les tests de bout en bout couvrent : démarrage de la pile sur la fausse clé Spinel, envoi APS

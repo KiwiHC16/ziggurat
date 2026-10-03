@@ -49,6 +49,9 @@ pub struct RunConfig {
     pub tx_power: i8,
     pub allow_erase: bool,
     pub listen: SocketAddr,
+    /// Delay before accepting Abeille, so that link status exchanges establish link
+    /// costs: until then routers refuse route replies and unicasts to them fail
+    pub warm_up: Duration,
 }
 
 /// `tcp://host:port` (wired network RCP or ser2net), or a serial device path. Same
@@ -79,6 +82,13 @@ pub async fn run(config: RunConfig) -> Result<()> {
     tracing::info!("Radio EUI64 {}", eui_to_hex(hw));
 
     let bridge = start_bridge(phy, hw, &config).await?;
+    if !config.warm_up.is_zero() {
+        tracing::info!(
+            "Waiting {} s for neighbor link costs before accepting Abeille",
+            config.warm_up.as_secs()
+        );
+        tokio::time::sleep(config.warm_up).await;
+    }
     serve(bridge, config.listen).await
 }
 

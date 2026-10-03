@@ -41,6 +41,7 @@ fn config(state_path: std::path::PathBuf) -> RunConfig {
         tx_power: 8,
         allow_erase: false,
         listen: "127.0.0.1:0".parse().unwrap(),
+        warm_up: Duration::ZERO,
     }
 }
 
@@ -409,4 +410,161 @@ async fn the_coordinator_answers_zdo_requests_itself() {
     // seq, success, nwk 0000, then a coordinator descriptor with NXP's manufacturer code
     assert_eq!(response[..4], [0x55, 0x00, 0x00, 0x00]);
     assert_eq!(response[4..9], [0x00, 0x40, 0x8F, 0x37, 0x10]);
+}
+
+/// Abeille's identification of a newly announced device, against a simulated
+/// BlitzWolf plug: announce, endpoints, descriptor, model, bind, then a command
+#[tokio::test(start_paused = true)]
+async fn abeille_identifies_a_simulated_plug() {
+    use ziggurat_sim::device::{Model, SimDevice};
+
+    const PLUG_NWK: u16 = 0x1A01;
+    const PLUG_IEEE: Eui64 = Eui64([0x01, 0x00, 0x00, 0x00, 0x00, 0x38, 0xC1, 0xA4]);
+
+    let dir = std::env::temp_dir().join(format!("zigate-plug-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let state_path = dir.join("network.json");
+
+    let medium = Medium::new(9);
+    let coordinator_node = medium.add_node("coordinator", COORDINATOR_IEEE);
+    let plug_node = medium.add_node("plug", PLUG_IEEE);
+    let bridge = start_bridge(
+        Arc::new(SimPhy::new(medium.clone(), coordinator_node)),
+        COORDINATOR_IEEE,
+        &config(state_path.clone()),
+    )
+    .await
+    .unwrap();
+    let (tx, mut abeille) = mpsc::unbounded_channel();
+    bridge.attach(tx);
+
+    let network = NetworkState::load(&state_path)
+        .unwrap()
+        .unwrap()
+        .network_config()
+        .unwrap();
+    let _plug = SimDevice::start(
+        Arc::new(SimPhy::new(medium, plug_node)),
+        network,
+        PLUG_IEEE,
+        Nwk(PLUG_NWK),
+        Model::blitzwolf_plug(),
+    )
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_secs(40)).await;
+
+    // Inclusion: the plug announces itself when joins open
+    bridge.handle(&Message {
+        msg_type: msg::PERMIT_JOIN,
+        payload: vec![0xFF, 0xFC, 0xFE, 0x00],
+    });
+    let (announce, _) = expect(&mut abeille, msg::DEVICE_ANNOUNCE).await;
+    assert_eq!(announce.payload[..2], PLUG_NWK.to_be_bytes());
+    assert_eq!(announce.payload[2..10], eui_to_u64(PLUG_IEEE).to_be_bytes());
+
+    // 0x8002 helper: wait for a ZDO/ZCL indication of this cluster from the plug
+    async fn indication(abeille: &mut mpsc::UnboundedReceiver<Outbound>, cluster: u16) -> Vec<u8> {
+        loop {
+            let (m, _) = expect(abeille, msg::DATA_INDICATION).await;
+            // status profile(2) cluster(2) src_ep dst_ep src_mode src(2) dst_mode dst(2)
+            if m.payload[3..5] == cluster.to_be_bytes()
+                && m.payload[8..10] == PLUG_NWK.to_be_bytes()
+            {
+                return m.payload[13..].to_vec();
+            }
+        }
+    }
+
+    // Active endpoints: 01 and F2
+    bridge.handle(&Message {
+        msg_type: msg::ACTIVE_ENDPOINTS,
+        payload: PLUG_NWK.to_be_bytes().to_vec(),
+    });
+    let rsp = indication(&mut abeille, 0x8005).await;
+    assert_eq!(rsp[1..], [0x00, 0x01, 0x1A, 0x02, 0x01, 0xF2]);
+
+    // Simple descriptor of endpoint 01: HA profile, On/Off among the servers
+    let mut payload = PLUG_NWK.to_be_bytes().to_vec();
+    payload.push(0x01);
+    bridge.handle(&Message {
+        msg_type: msg::SIMPLE_DESCRIPTOR,
+        payload,
+    });
+    let rsp = indication(&mut abeille, 0x8004).await;
+    assert_eq!(rsp[5..8], [0x01, 0x04, 0x01]);
+    assert!(rsp.windows(2).any(|w| w == [0x06, 0x00]));
+
+    // Group membership, which Abeille asks before going on: a cluster-specific response
+    let mut payload = vec![0x02];
+    payload.extend(PLUG_NWK.to_be_bytes());
+    payload.extend([0x01, 0x01, 0x00]);
+    bridge.handle(&Message {
+        msg_type: msg::GET_GROUP_MEMBERSHIP,
+        payload,
+    });
+    let rsp = indication(&mut abeille, 0x0004).await;
+    assert_eq!(rsp[0] & 0x03, 0x01, "cluster-specific frame type");
+    assert_eq!(rsp[2], 0x02, "Get Group Membership Response");
+
+    // Basic cluster: manufacturer name and model identifier, as Abeille's findModel needs
+    let mut payload = vec![0x02];
+    payload.extend(PLUG_NWK.to_be_bytes());
+    payload.extend([
+        0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x04, 0x00, 0x05,
+    ]);
+    bridge.handle(&Message {
+        msg_type: msg::READ_ATTRIBUTE,
+        payload,
+    });
+    let rsp = indication(&mut abeille, 0x0000).await;
+    let text = String::from_utf8_lossy(&rsp);
+    assert!(text.contains("_TZ3000_amdymr7l"), "{rsp:02X?}");
+    assert!(text.contains("TS011F"), "{rsp:02X?}");
+
+    // Bind On/Off of the plug to the coordinator: the bridge finds the plug's NWK address
+    let mut payload = eui_to_u64(PLUG_IEEE).to_be_bytes().to_vec();
+    payload.extend([0x01, 0x00, 0x06, 0x03]);
+    payload.extend(eui_to_u64(COORDINATOR_IEEE).to_be_bytes());
+    payload.push(0x01);
+    bridge.handle(&Message {
+        msg_type: msg::BIND,
+        payload,
+    });
+    let rsp = indication(&mut abeille, 0x8021).await;
+    assert_eq!(rsp[1], 0x00, "bind success");
+
+    // Switch it on: the plug reports On/Off = 1
+    let mut payload = vec![0x02];
+    payload.extend(PLUG_NWK.to_be_bytes());
+    payload.extend([0x01, 0x01, 0x01]);
+    bridge.handle(&Message {
+        msg_type: msg::ON_OFF,
+        payload,
+    });
+    loop {
+        let rsp = indication(&mut abeille, 0x0006).await;
+        // Report attributes: FCF seq 0A, attribute 0000, bool, value
+        if rsp[2] == 0x0A {
+            assert_eq!(rsp[3..], [0x00, 0x00, 0x10, 0x01]);
+            break;
+        }
+    }
+
+    // Toggle: back off
+    let mut payload = vec![0x02];
+    payload.extend(PLUG_NWK.to_be_bytes());
+    payload.extend([0x01, 0x01, 0x02]);
+    bridge.handle(&Message {
+        msg_type: msg::ON_OFF,
+        payload,
+    });
+    loop {
+        let rsp = indication(&mut abeille, 0x0006).await;
+        if rsp[2] == 0x0A {
+            assert_eq!(rsp[3..], [0x00, 0x00, 0x10, 0x00]);
+            break;
+        }
+    }
 }

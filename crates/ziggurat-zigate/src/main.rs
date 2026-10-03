@@ -59,6 +59,10 @@ enum Mode {
         /// Let Abeille's "erase PDM" (0x0012) wipe the network
         #[arg(long)]
         allow_erase: bool,
+        /// Seconds to wait after the network starts before accepting Abeille: two link
+        /// status periods, so routers know their link cost to the coordinator
+        #[arg(long, default_value_t = 35)]
+        warm_up: u64,
     },
 }
 
@@ -79,6 +83,7 @@ async fn main() -> Result<()> {
             channel,
             tx_power,
             allow_erase,
+            warm_up,
         } => {
             server::run(RunConfig {
                 device,
@@ -89,6 +94,7 @@ async fn main() -> Result<()> {
                 tx_power,
                 allow_erase,
                 listen: args.listen,
+                warm_up: std::time::Duration::from_secs(warm_up),
             })
             .await
         }

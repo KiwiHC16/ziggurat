@@ -13,6 +13,7 @@ publish = false
 ziggurat-ieee-802154.workspace = true
 ziggurat-phy.workspace = true
 ziggurat-spinel.workspace = true
+ziggurat-driver.workspace = true
 
 anyhow = "1"
 clap = { version = "4.6", features = ["derive"] }
@@ -20,9 +21,9 @@ parking_lot = "0.12.5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "io-util"] }
+serde_json = "1"
 
 [dev-dependencies]
-ziggurat-driver.workspace = true
 ziggurat-phy-spinel.workspace = true
 ziggurat-zigbee.workspace = true
 tokio = { version = "1.53.1", features = ["test-util"] }

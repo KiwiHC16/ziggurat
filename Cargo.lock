@@ -1986,6 +1986,7 @@ dependencies = [
  "anyhow",
  "clap",
  "parking_lot",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",

@@ -23,6 +23,24 @@ passerelle ou par simulateur, démons surveillés par Jeedom, logs `zigguratziga
 interdits au web par `/etc/apache2/conf-available/ziggurat-data.conf`). Les programmes
 sont dans `/usr/local/bin`. Les boutons des appareils simulés sont des commandes Jeedom.
 
+## `flash/gecko_xmodem.py`
+
+Envoi d'un firmware `.gbl` au bootloader Gecko d'une clé Silicon Labs (Sonoff Dongle Plus
+MG24), en XMODEM-CRC, sans aucune dépendance (Python 3.7 suffit). Sert quand
+`universal-silabs-flasher` ne peut pas tourner sur l'hôte où la clé est branchée (Python
+trop ancien), et que le flash à travers un tunnel réseau (`socat`) échoue (menu du
+bootloader désynchronisé).
+
+1. Faire passer la clé dans son bootloader : `universal-silabs-flasher` depuis une autre
+   machine, à travers un tunnel SSH + `socat` vers le port série (l'identification passe,
+   avec `stty -crtscts -ixon -ixoff` sur le port avant `socat`), ou toute autre méthode.
+2. Sur l'hôte de la clé : `python3 gecko_xmodem.py <tty> <fichier.gbl> --dry-run` (lit
+   seulement le menu « Gecko Bootloader »), puis sans `--dry-run` pour envoyer le firmware
+   (option 1 du menu, XMODEM-CRC par blocs de 128 octets) et lancer l'application (option 2).
+
+Utilisé le 26/10/2026 pour passer la clé MG24 de jeedompro d'EmberZNet 7.4.5 à OpenThread
+RCP 2.7.2.0 (960 blocs, « Serial upload complete »), vérifiée ensuite en Spinel à 460 800 bauds.
+
 ## `abeille/*.php`
 
 Pilotage d'Abeille en ligne de commande, en `www-data` :

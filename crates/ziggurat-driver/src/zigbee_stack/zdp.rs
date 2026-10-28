@@ -225,6 +225,13 @@ impl<P: RadioPhy, R: Runtime> ZigbeeStack<P, R> {
     fn handle_parent_annce(&self, nwk_frame: &NwkFrame, aps_frame: &ApsDataFrame) {
         let source = nwk_frame.nwk_header.source;
 
+        // Our own post-boot announcement coming back (seen relayed by a Xiaomi router
+        // on jeedomsauna) would drop every child it lists as "the other router's"
+        if source == self.state.network_address {
+            tracing::debug!("Ignoring our own parent announcement");
+            return;
+        }
+
         let (tsn, annce) = match ParentAnnce::deserialize(&aps_frame.asdu) {
             Ok(parsed) => parsed,
             Err(err) => {
@@ -339,6 +346,11 @@ impl<P: RadioPhy, R: Runtime> ZigbeeStack<P, R> {
     /// children it has heard keepalives from. Our entries for them are stale.
     fn handle_parent_annce_rsp(&self, nwk_frame: &NwkFrame, aps_frame: &ApsDataFrame) {
         let source = nwk_frame.nwk_header.source;
+
+        if source == self.state.network_address {
+            tracing::debug!("Ignoring a parent announcement response from ourselves");
+            return;
+        }
 
         let (_tsn, response) = match ParentAnnceRsp::deserialize(&aps_frame.asdu) {
             Ok(parsed) => parsed,

@@ -12,8 +12,9 @@ use ziggurat_zigbee::nwk::commands::{NwkCommand, NwkLeaveCommand};
 use ziggurat_zigbee::indirect::Delivery;
 
 use super::{
-    DeliveryError, DeviceLeaveReason, IndirectFrame, IndirectPayload, NwkSecurityMode, SendKind,
-    TxOutcome, TxPolicy, TxPriority, ZigbeeNotification, ZigbeeStack,
+    DeliveryError, DeviceLeaveReason, IndirectFrame, IndirectPayload, NwkDeviceType,
+    NwkSecurityMode, SendKind, TxOutcome, TxPolicy, TxPriority, ZigbeeNotification, ZigbeeStack,
+    neighbors,
 };
 
 impl<P: RadioPhy, R: Runtime> ZigbeeStack<P, R> {
@@ -55,11 +56,37 @@ impl<P: RadioPhy, R: Runtime> ZigbeeStack<P, R> {
         };
 
         // Spec 3.6.10.4: a poll from a known device refreshes its keepalive deadline
-        let known_device = self.core().nib.neighbors.refresh_child_timeout(
+        let mut known_device = self.core().nib.neighbors.refresh_child_timeout(
             source_eui64,
             source_nwk,
             self.core_now(),
         );
+
+        // A device of our network (in the address map) that polls us believes we are
+        // its parent: we lost its child entry (restart, wrongly dropped), not the other
+        // way around. Adopt it back instead of asking it to leave, which battery
+        // devices such as Xiaomi sensors take as a definitive leave.
+        if !known_device && let (Some(eui64), Some(nwk)) = (source_eui64, source_nwk) {
+            tracing::info!("Poll from lost child {eui64:?} ({nwk:?}), adopting it back");
+
+            let now = self.core_now();
+            let mut core = self.core();
+            core.nib.neighbors.upsert_child(
+                neighbors::ChildDescriptor {
+                    eui64,
+                    network_address: nwk,
+                    device_type: NwkDeviceType::EndDevice,
+                    rx_on_when_idle: false,
+                    device_timeout: self.tunables.end_device_timeout_default().duration(),
+                    relationship: neighbors::Relationship::Child,
+                },
+                now,
+            );
+            known_device = core
+                .nib
+                .neighbors
+                .refresh_child_timeout(Some(eui64), Some(nwk), now);
+        }
 
         // The RCP only told the device to keep listening (frame-pending=1 in the
         // poll's auto-ACK) if the poll's source address was already written to the

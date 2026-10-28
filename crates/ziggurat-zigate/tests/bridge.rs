@@ -417,6 +417,47 @@ async fn restored_router_children_are_not_aged() {
     assert!(!children.iter().any(|c| c.nwk == "2C85"), "{children:?}");
 }
 
+/// Our own Parent_annce of the restored end devices must not drop them: on
+/// jeedomsauna (26/10) three Xiaomi sensors were dropped 45 ms after the bridge
+/// announced them ("is now parented by Nwk(0x0000)") and then asked to leave
+#[tokio::test(start_paused = true)]
+async fn own_parent_announcement_keeps_restored_end_devices() {
+    use ziggurat_zigate::state::Child;
+
+    let s = setup("own-parent-annce").await;
+    drop(s.bridge);
+
+    let mut saved = NetworkState::load(&s.state_path).unwrap().unwrap();
+    saved.children = vec![Child {
+        ieee: "00158D0001DF3D57".into(),
+        nwk: "B95A".into(),
+        rx_on_when_idle: false,
+        router: false,
+    }];
+    saved.save(&s.state_path).unwrap();
+
+    // Same medium with the router still running, which relays our broadcasts; the
+    // first radio is cut off in case its tasks outlive the dropped bridge
+    let second = s.medium.add_node("second", COORDINATOR_IEEE);
+    s.medium
+        .set_link_both(s.coordinator_node, s.router_node, Link::DOWN);
+    s.medium
+        .set_link_both(s.coordinator_node, second, Link::DOWN);
+    let bridge = start_bridge(
+        Arc::new(SimPhy::new(s.medium.clone(), second)),
+        COORDINATOR_IEEE,
+        &config(s.state_path.clone()),
+    )
+    .await
+    .unwrap();
+
+    // Past the jittered post-boot announcement and its relay
+    tokio::time::sleep(Duration::from_secs(60)).await;
+
+    let children = bridge.state().children;
+    assert!(children.iter().any(|c| c.nwk == "B95A"), "{children:?}");
+}
+
 #[tokio::test(start_paused = true)]
 async fn native_read_attribute_reaches_the_device() {
     let mut s = setup("native-read").await;

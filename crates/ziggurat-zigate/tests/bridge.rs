@@ -343,6 +343,80 @@ async fn restart_restores_the_network() {
     assert!(after.nwk_frame_counter > before.nwk_frame_counter);
 }
 
+/// Restored router children are not aged: an IKEA bulb restored as a direct child
+/// was evicted ("left: KeepaliveTimeout") a day after a restart (jeedompro, 28/10)
+#[tokio::test(start_paused = true)]
+async fn restored_router_children_are_not_aged() {
+    use ziggurat_zigate::state::Child;
+
+    let dir = std::env::temp_dir().join(format!("zigate-restored-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("network.json");
+
+    let medium = Medium::new(6);
+    let first = medium.add_node("first", COORDINATOR_IEEE);
+    let bridge = start_bridge(
+        Arc::new(SimPhy::new(medium.clone(), first)),
+        COORDINATOR_IEEE,
+        &config(path.clone()),
+    )
+    .await
+    .unwrap();
+    drop(bridge);
+
+    let mut saved = NetworkState::load(&path).unwrap().unwrap();
+    saved.children = vec![
+        Child {
+            ieee: "000B57FFFED2AF6A".into(),
+            nwk: "10FD".into(),
+            rx_on_when_idle: true,
+            router: true,
+        },
+        Child {
+            ieee: "00158D0001ED4520".into(),
+            nwk: "2C85".into(),
+            rx_on_when_idle: false,
+            router: false,
+        },
+    ];
+    saved.save(&path).unwrap();
+
+    let second = medium.add_node("second", COORDINATOR_IEEE);
+    let bridge = start_bridge(
+        Arc::new(SimPhy::new(medium, second)),
+        COORDINATOR_IEEE,
+        &config(path),
+    )
+    .await
+    .unwrap();
+    let (tx, mut abeille) = mpsc::unbounded_channel();
+    bridge.attach(tx);
+
+    // Past the day restored end devices get before their first keepalive
+    tokio::time::sleep(Duration::from_secs(25 * 60 * 60)).await;
+
+    let mut left = Vec::new();
+    while let Ok((message, _)) = abeille.try_recv() {
+        if message.msg_type == msg::LEAVE_INDICATION {
+            left.push(message.payload);
+        }
+    }
+    assert_eq!(
+        left.len(),
+        1,
+        "only the silent end device leaves: {left:02X?}"
+    );
+    assert_eq!(left[0][..8], 0x00158D0001ED4520u64.to_be_bytes());
+
+    let children = bridge.state().children;
+    assert!(
+        children.iter().any(|c| c.nwk == "10FD" && c.router),
+        "{children:?}"
+    );
+    assert!(!children.iter().any(|c| c.nwk == "2C85"), "{children:?}");
+}
+
 #[tokio::test(start_paused = true)]
 async fn native_read_attribute_reaches_the_device() {
     let mut s = setup("native-read").await;

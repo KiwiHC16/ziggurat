@@ -24,9 +24,12 @@ use crate::send_tracker::{ConfirmKind, SendTracker};
 
 use crate::wire::*;
 
-/// Child entries restored from a backup re-negotiate their real timeout at the
-/// first keepalive; until then they age out after a conservative day.
+/// End device children restored from a backup re-negotiate their real timeout at
+/// the first keepalive; until then they age out after a conservative day.
 const RESTORED_CHILD_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Router children send no keepalive and are not aged (spec 3.6.10.5), as on join.
+const ROUTER_CHILD_TIMEOUT: Duration = Duration::from_secs(0xFFFFFFFF);
 
 /// Map a `configure` payload to the driver's `NetworkConfig`. The caller restores
 /// the APS frame counter from `payload.state.aps_frame_counter` after construction.
@@ -199,7 +202,11 @@ pub fn apply_children<P: RadioPhy, R: Runtime>(
                 network_address: entry.nwk,
                 device_type,
                 rx_on_when_idle: entry.flags.rx_on_when_idle,
-                device_timeout: RESTORED_CHILD_TIMEOUT,
+                device_timeout: if device_type == NwkDeviceType::Router {
+                    ROUTER_CHILD_TIMEOUT
+                } else {
+                    RESTORED_CHILD_TIMEOUT
+                },
                 relationship: Relationship::Child,
             },
             now,

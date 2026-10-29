@@ -5,7 +5,8 @@ use std::time::Duration;
 
 use ziggurat_driver::runtime::TokioSpawner;
 use ziggurat_driver::zigbee_stack::{
-    ApsAck, DeliveryError, NetworkConfig, NwkDeviceType, RouteDirective, Tunables, TxPriority,
+    ApsAck, DeliveryError, HostRoute, NetworkConfig, NwkDeviceType, RouteDirective, Tunables,
+    TxPriority,
     WELL_KNOWN_LINK_KEY, ZigbeeNotification, ZigbeeStack,
 };
 use ziggurat_ieee_802154::types::{Eui64, Key, Nwk, PanId};
@@ -67,6 +68,13 @@ async fn next_aps<P: RadioPhy>(stack: &ZigbeeStack<P>) -> (Nwk, u16, Vec<u8>) {
 }
 
 fn on_off_toggle<P: RadioPhy>(stack: &ZigbeeStack<P>) -> ziggurat_driver::zigbee_stack::SendHandle {
+    on_off_toggle_routed(stack, RouteDirective::StackDecides)
+}
+
+fn on_off_toggle_routed<P: RadioPhy>(
+    stack: &ZigbeeStack<P>,
+    route: RouteDirective,
+) -> ziggurat_driver::zigbee_stack::SendHandle {
     // ZCL: cluster-specific, client to server, disable default response, seq 1, Toggle
     stack
         .send_aps_unicast(
@@ -81,7 +89,7 @@ fn on_off_toggle<P: RadioPhy>(stack: &ZigbeeStack<P>) -> ziggurat_driver::zigbee
             None,
             false,
             TxPriority::UserNormal,
-            RouteDirective::StackDecides,
+            route,
         )
         .expect("send admitted")
 }
@@ -170,6 +178,56 @@ async fn one_way_link_loses_the_aps_ack() {
         matches!(result, Err(DeliveryError::NwkNoAck { .. })),
         "{result:?}"
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn one_way_neighbor_is_reached_through_a_relay() {
+    let medium = Medium::new(1);
+    let coordinator_node = medium.add_node("coordinator", Eui64([0x01; 8]));
+    let relay_node = medium.add_node("relay", Eui64([0x03; 8]));
+    let far_node = medium.add_node("far", Eui64([0x02; 8]));
+    // The coordinator hears the far router, which does not hear it (T2 on the Terrasse
+    // network of jeedompro, 29/10/2026); the relay hears both
+    medium.set_link(coordinator_node, far_node, Link::DOWN);
+
+    let coordinator = start(
+        Arc::new(SimPhy::new(medium.clone(), coordinator_node)),
+        network(NwkDeviceType::Coordinator, Nwk(0x0000), Eui64([0x01; 8])),
+    )
+    .await;
+    let _relay = start(
+        Arc::new(SimPhy::new(medium.clone(), relay_node)),
+        network(NwkDeviceType::Router, Nwk(0x1111), Eui64([0x03; 8])),
+    )
+    .await;
+    let far = start(
+        Arc::new(SimPhy::new(medium.clone(), far_node)),
+        network(NwkDeviceType::Router, ROUTER_NWK, Eui64([0x02; 8])),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_secs(40)).await;
+
+    // Sent directly, as the bridge hints for a neighbor: lost
+    let direct = on_off_toggle_routed(
+        &coordinator,
+        RouteDirective::Hint(HostRoute::NextHop(ROUTER_NWK)),
+    );
+    let result = direct.handed_off().await;
+    assert!(
+        matches!(result, Err(DeliveryError::NwkNoAck { .. })),
+        "{result:?}"
+    );
+    let link = coordinator.state.core.lock().nib.neighbors.link(ROUTER_NWK);
+    assert!(link.is_some_and(|link| link.is_one_way()), "{link:?}");
+
+    // Left to the stack, the frame goes through the relay
+    let routed = on_off_toggle(&coordinator);
+    let (source, cluster, _) = tokio::time::timeout(Duration::from_secs(10), next_aps(&far))
+        .await
+        .expect("far router receives the frame through the relay");
+    assert_eq!(source, Nwk(0x0000));
+    assert_eq!(cluster, CLUSTER_ON_OFF);
+    routed.delivered().await.expect("APS ack back through the relay");
 }
 
 #[tokio::test(start_paused = true)]

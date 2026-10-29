@@ -165,6 +165,16 @@ pub struct NeighborLink {
     pub outgoing_cost: u8,
     /// The cost of the link as measured by us, from received LQI samples
     pub incoming_cost: u8,
+    pub transmit_failure: u8,
+}
+
+impl NeighborLink {
+    /// The neighbor does not list us in its link status and direct transmissions to it
+    /// have failed: the radio link only works towards us
+    #[must_use]
+    pub fn is_one_way(&self) -> bool {
+        self.outgoing_cost == 0 && self.transmit_failure > 0
+    }
 }
 
 /// The neighbor table: link quality accounting, link status digestion, and aging.
@@ -210,6 +220,7 @@ impl Neighbors {
                 eui64: entry.extended_address,
                 outgoing_cost: entry.outgoing_cost,
                 incoming_cost: entry.incoming_link_cost(),
+                transmit_failure: entry.transmit_failure,
             })
     }
 

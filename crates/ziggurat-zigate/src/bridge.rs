@@ -656,7 +656,9 @@ impl<P: RadioPhy> Bridge<P> {
     /// the stack has no route (Zigbee 3.6.3.3), as the ZiGate does: Ziggurat would
     /// otherwise run a route discovery that a router which just joined ignores, since
     /// it does not know its link cost yet, and Abeille's interrogation right after the
-    /// Device_annce fails. The stack still prefers any route it has.
+    /// Device_annce fails. The stack still prefers any route it has. A neighbor that
+    /// cannot hear us (direct sends failed, absent from its link status) is left to
+    /// the stack's route discovery, through the routers that do hear us.
     fn route_to(&self, nwk: u16) -> RouteDirective {
         let is_neighbor = self
             .stack
@@ -666,7 +668,7 @@ impl<P: RadioPhy> Bridge<P> {
             .nib
             .neighbors
             .link(Nwk(nwk))
-            .is_some();
+            .is_some_and(|link| !link.is_one_way());
         if is_neighbor {
             RouteDirective::Hint(HostRoute::NextHop(Nwk(nwk)))
         } else {

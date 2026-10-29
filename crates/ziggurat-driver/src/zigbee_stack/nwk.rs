@@ -753,10 +753,26 @@ impl<P: RadioPhy, R: Runtime> ZigbeeStack<P, R> {
             return None;
         }
 
-        self.core()
+        let route = self
+            .core()
             .nib
             .routing
-            .route_to(destination, self.tunables.max_source_route())
+            .route_to(destination, self.tunables.max_source_route());
+
+        // A route record without relays assumes the link works both ways: not for a
+        // neighbor that cannot hear us, which then gets a route discovery instead
+        if let Some(Route::NextHop(next_hop)) = route
+            && next_hop == destination
+            && self
+                .core()
+                .nib
+                .neighbors
+                .link(destination)
+                .is_some_and(|link| link.is_one_way())
+        {
+            return None;
+        }
+        route
     }
 
     /// Wrap an encrypted NWK payload in a unicast 802.15.4 data frame. The sequence

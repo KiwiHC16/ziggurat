@@ -6,8 +6,7 @@ use std::time::Duration;
 use ziggurat_driver::runtime::TokioSpawner;
 use ziggurat_driver::zigbee_stack::{
     ApsAck, DeliveryError, HostRoute, NetworkConfig, NwkDeviceType, RouteDirective, Tunables,
-    TxPriority,
-    WELL_KNOWN_LINK_KEY, ZigbeeNotification, ZigbeeStack,
+    TxPriority, WELL_KNOWN_LINK_KEY, ZigbeeNotification, ZigbeeStack,
 };
 use ziggurat_ieee_802154::types::{Eui64, Key, Nwk, PanId};
 use ziggurat_phy::RadioPhy;
@@ -227,7 +226,10 @@ async fn one_way_neighbor_is_reached_through_a_relay() {
         .expect("far router receives the frame through the relay");
     assert_eq!(source, Nwk(0x0000));
     assert_eq!(cluster, CLUSTER_ON_OFF);
-    routed.delivered().await.expect("APS ack back through the relay");
+    routed
+        .delivered()
+        .await
+        .expect("APS ack back through the relay");
 }
 
 #[tokio::test(start_paused = true)]

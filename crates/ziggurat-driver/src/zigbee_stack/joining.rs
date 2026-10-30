@@ -41,6 +41,9 @@ use super::{
     neighbors,
 };
 
+/// The trust center: always the coordinator here
+const TRUST_CENTER_NWK: Nwk = Nwk(0x0000);
+
 impl<P: RadioPhy, R: Runtime> ZigbeeStack<P, R> {
     #[allow(clippy::significant_drop_tightening)]
     pub fn process_802154_association_request(
@@ -96,7 +99,10 @@ impl<P: RadioPhy, R: Runtime> ZigbeeStack<P, R> {
         let short_address = self.allocate_network_address(source_eui64);
         tracing::info!("Device {source_eui64:?} is joining as {short_address:?}");
 
-        self.begin_join(source_eui64);
+        // Link keys belong to the trust center: a router only relays
+        if self.state.role == NwkDeviceType::Coordinator {
+            self.begin_join(source_eui64);
+        }
 
         // Joiners retry association requests if they miss our response, so the address
         // and table entries must be stable across retries
@@ -157,8 +163,97 @@ impl<P: RadioPhy, R: Runtime> ZigbeeStack<P, R> {
             return;
         }
 
-        self.deliver_key_and_announce(short_address, eui64, JoinKind::New)
-            .await;
+        if self.state.role == NwkDeviceType::Coordinator {
+            self.deliver_key_and_announce(short_address, eui64, JoinKind::New)
+                .await;
+        } else {
+            // The trust center answers with a tunneled network key, or stays silent
+            // when it does not authorize this join
+            self.send_update_device(
+                eui64,
+                short_address,
+                ApsUpdateDeviceStatus::StandardDeviceUnsecuredJoin,
+            );
+        }
+    }
+
+    /// Spec 4.4.11.2: tell the trust center about a device joining, rejoining or leaving
+    /// through us. Secured with the link key we share with it (spec Table 4-7).
+    fn send_update_device(&self, device: Eui64, short_address: Nwk, status: ApsUpdateDeviceStatus) {
+        let command = ApsCommandFrame {
+            frame_control: ApsFrameControl {
+                frame_type: ApsFrameType::Command,
+                delivery_mode: ApsDeliveryMode::Unicast,
+                reserved1: 0b0,
+                security: true,
+                ack_request: false,
+                extended_header: false,
+            },
+            counter: self.next_aps_counter(),
+            command: ApsCommandFrameCommand::UpdateDevice(ApsUpdateDeviceCommandFrame {
+                device_address: device,
+                device_short_address: short_address,
+                status,
+            }),
+        };
+
+        let encrypted = {
+            let mut core = self.core();
+            let trust_center = core
+                .nib
+                .address_map
+                .eui64_for(TRUST_CENTER_NWK)
+                .unwrap_or(device);
+            let link_key = core.aib.aps_security.device_link_key(trust_center);
+            core.aib.aps_security.encrypt_command_with_link_key(
+                &link_key,
+                NwkSecurityHeaderKeyId::DataKey,
+                &command,
+            )
+        };
+
+        if let Err(err) = self.send_secured_aps_payload(TRUST_CENTER_NWK, encrypted.to_bytes()) {
+            tracing::warn!("Failed to send Update-Device for {device:?}: {err}");
+        }
+    }
+
+    /// Spec 4.6.3.7: unwrap a Tunnel command and hand the still-encrypted Transport Key
+    /// to our child. The frame goes out without NWK security: the child has no network
+    /// key yet.
+    fn relay_tunneled_frame(&self, tunnel: &ApsTunnelCommandFrame) {
+        let child = self
+            .core()
+            .nib
+            .neighbors
+            .entries()
+            .find(|entry| entry.extended_address == tunnel.destination_address)
+            .map(|entry| entry.network_address);
+
+        let Some(child) = child else {
+            tracing::warn!(
+                "Dropping tunneled frame for {:?}: not a child",
+                tunnel.destination_address
+            );
+            return;
+        };
+
+        let frame = match self.nwk_data_frame(child, tunnel.tunneled_frame.to_vec()) {
+            Ok(frame) => frame.unsecured(),
+            Err(err) => {
+                tracing::warn!("Failed to build the tunneled frame for {child:?}: {err}");
+                return;
+            }
+        };
+
+        if let Err(err) = self.send_unicast(Unicast {
+            frame,
+            security: NwkSecurityMode::Unsecured,
+            mode: SendMode::Direct,
+            policy: TxPolicy::STACK_CRITICAL,
+            outcome: TxOutcome::Discard,
+        }) {
+            tracing::warn!("Failed to relay the tunneled frame to {child:?}: {err}");
+        }
     }
 
     /// Deliver the network key and, once the transport lands, announce the join. The
@@ -672,7 +767,11 @@ impl<P: RadioPhy, R: Runtime> ZigbeeStack<P, R> {
                 tracing::warn!("Ignoring switch key from {source:?}: {cmd:?}");
             }
             ApsCommandFrameCommand::Tunnel(cmd) => {
-                tracing::warn!("Tunnel command from {source:?} is not yet handled: {cmd:?}");
+                if self.state.role == NwkDeviceType::Coordinator {
+                    tracing::warn!("Ignoring tunnel command from {source:?}: {cmd:?}");
+                } else {
+                    self.relay_tunneled_frame(cmd);
+                }
             }
             ApsCommandFrameCommand::VerifyKey(cmd) => {
                 if self.state.role == NwkDeviceType::Coordinator {
@@ -1137,6 +1236,11 @@ impl<P: RadioPhy, R: Runtime> ZigbeeStack<P, R> {
     ) {
         tracing::info!("Rejoin request (secured: {secured}): {rejoin_request:#?}");
 
+        if !self.serves_children() {
+            tracing::debug!("Ignoring rejoin request: not taking children");
+            return;
+        }
+
         let Some(source_ieee) = nwk_frame.nwk_header.source_ieee else {
             tracing::warn!("Rejoin request source EUI64 is missing");
             return;
@@ -1229,6 +1333,20 @@ impl<P: RadioPhy, R: Runtime> ZigbeeStack<P, R> {
             secured,
         );
 
+        // The trust center decides: it tunnels the key back for an unsecured rejoin
+        if self.state.role != NwkDeviceType::Coordinator {
+            self.send_update_device(
+                source_ieee,
+                assigned_nwk,
+                if secured {
+                    ApsUpdateDeviceStatus::StandardDeviceSecuredRejoin
+                } else {
+                    ApsUpdateDeviceStatus::StandardDeviceTrustCenterRejoin
+                },
+            );
+            return;
+        }
+
         // A trust center rejoin means the device no longer has the network key
         if !secured {
             // Spec 4.7.3.6: an unsecured rejoin re-delivers the network key encrypted
@@ -1320,6 +1438,10 @@ impl<P: RadioPhy, R: Runtime> ZigbeeStack<P, R> {
 
         if let Some(source_ieee) = source_ieee {
             self.core().nib.neighbors.remove(source_ieee);
+
+            if self.state.role != NwkDeviceType::Coordinator {
+                self.send_update_device(source_ieee, source, ApsUpdateDeviceStatus::DeviceLeft);
+            }
         }
 
         // The address map entry and any negotiated link key are kept around so that the

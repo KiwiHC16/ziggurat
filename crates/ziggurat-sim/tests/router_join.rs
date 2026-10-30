@@ -185,3 +185,147 @@ async fn joined_router_does_not_attract_joiners() {
     let result = join_network::<_, TokioRuntime>(&third_phy, &wanted).await;
     assert!(matches!(result, Err(JoinError::NoNetwork)), "{result:?}");
 }
+
+struct ThroughRouter {
+    coordinator: Arc<ZigbeeStack<SimPhy>>,
+    router: Arc<ZigbeeStack<SimPhy>>,
+    medium: Arc<Medium>,
+    third_node: ziggurat_sim::medium::NodeId,
+    router_address: Nwk,
+}
+
+/// A coordinator, and a joined router taking children; the third node only hears the
+/// router. Joins are open on the whole network.
+async fn router_with_room() -> ThroughRouter {
+    let medium = Medium::new(1);
+    let coordinator_node = medium.add_node("coordinator", COORDINATOR_IEEE);
+    let joiner_node = medium.add_node("joiner", JOINER_IEEE);
+    let third_node = medium.add_node("third", Eui64([0x03; 8]));
+    medium.set_link_both(
+        coordinator_node,
+        third_node,
+        ziggurat_sim::medium::Link::DOWN,
+    );
+
+    let coordinator = start(
+        Arc::new(SimPhy::new(medium.clone(), coordinator_node)),
+        coordinator_config(),
+    )
+    .await;
+    coordinator.permit_joins(300, true);
+
+    let joiner_phy = Arc::new(SimPhy::new(medium.clone(), joiner_node));
+    let joined = join_network::<_, TokioRuntime>(joiner_phy.as_ref(), &params())
+        .await
+        .expect("joins");
+    let router = start(joiner_phy, joined.router_config(&params())).await;
+    router.set_accepts_children(true);
+    router.permit_joins(300, true);
+
+    // Link status exchanges must establish the link cost before anything is routed
+    tokio::time::sleep(Duration::from_secs(40)).await;
+
+    ThroughRouter {
+        coordinator,
+        router,
+        medium,
+        third_node,
+        router_address: joined.network_address,
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn child_joins_through_the_router_and_reaches_the_coordinator() {
+    let network = router_with_room().await;
+    let third_ieee = Eui64([0x03; 8]);
+
+    let mut wanted = params();
+    wanted.ieee = third_ieee;
+    let third_phy = Arc::new(SimPhy::new(network.medium.clone(), network.third_node));
+    let joined = join_network::<_, TokioRuntime>(third_phy.as_ref(), &wanted)
+        .await
+        .expect("joins through the router");
+
+    assert_eq!(joined.parent, network.router_address);
+    assert_eq!(joined.network_key, NETWORK_KEY);
+    assert_eq!(joined.trust_center, COORDINATOR_IEEE);
+
+    // The router keeps it as a child
+    let child = network
+        .router
+        .state
+        .core
+        .lock()
+        .nib
+        .neighbors
+        .entries()
+        .find(|entry| entry.extended_address == third_ieee)
+        .map(|entry| entry.network_address);
+    assert_eq!(child, Some(joined.network_address));
+
+    // Its frames cross the router, secured with the key it received
+    let third = start(third_phy, joined.router_config(&wanted)).await;
+    tokio::time::sleep(Duration::from_secs(40)).await;
+    third
+        .send_aps_broadcast(
+            Nwk(0xFFFD),
+            0x0000,
+            0x0013,
+            0,
+            0,
+            30,
+            device_annce_payload(1, joined.network_address, third_ieee),
+            ziggurat_driver::zigbee_stack::TxPriority::UserNormal,
+        )
+        .expect("announces");
+
+    let heard = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            for notification in network.coordinator.next_notifications().await {
+                if let ZigbeeNotification::ReceivedApsCommand {
+                    source,
+                    cluster_id: 0x0013,
+                    ..
+                } = notification
+                    && source == joined.network_address
+                {
+                    return source;
+                }
+            }
+        }
+    })
+    .await
+    .expect("Device_annce crosses the router");
+    assert_eq!(heard, joined.network_address);
+}
+
+#[tokio::test(start_paused = true)]
+async fn sleeping_child_polls_its_key_through_the_router() {
+    let network = router_with_room().await;
+
+    let mut wanted = params();
+    wanted.ieee = Eui64([0x03; 8]);
+    wanted.rx_on_when_idle = false;
+    let third_phy = SimPhy::new(network.medium.clone(), network.third_node);
+    let joined = join_network::<_, TokioRuntime>(&third_phy, &wanted)
+        .await
+        .expect("joins through the router");
+    assert_eq!(joined.network_key, NETWORK_KEY);
+}
+
+#[tokio::test(start_paused = true)]
+async fn trust_center_refuses_a_child_while_closed() {
+    let network = router_with_room().await;
+    // The router still advertises joins, but the trust center window is shut
+    network.coordinator.permit_joins(0, false);
+
+    let mut wanted = params();
+    wanted.ieee = Eui64([0x03; 8]);
+    wanted.key_wait = Duration::from_secs(2);
+    let third_phy = SimPhy::new(network.medium.clone(), network.third_node);
+    let result = join_network::<_, TokioRuntime>(&third_phy, &wanted).await;
+    assert!(
+        matches!(result, Err(JoinError::NoNetworkKey(_))),
+        "{result:?}"
+    );
+}

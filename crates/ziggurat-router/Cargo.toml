@@ -16,6 +16,7 @@ ziggurat-phy-spinel.workspace = true
 ziggurat-driver.workspace = true
 ziggurat-zigbee.workspace = true
 ziggurat-ieee-802154.workspace = true
+ziggurat-protocol.workspace = true
 
 anyhow = "1"
 clap = { version = "4.6", features = ["derive"] }

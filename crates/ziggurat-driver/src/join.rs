@@ -1,10 +1,10 @@
-//! Joining an existing network as a childless router.
+//! Joining an existing network as a router.
 //!
 //! The stack itself only starts on a network it already knows, so this client runs
 //! first and owns the radio alone: active scan, MAC association, then the network key
 //! delivered by the trust center (spec 4.6.3.2). The result is a [`NetworkConfig`] for
-//! a regular [`NwkDeviceType::Router`] stack. Such a router relays and sends frames but
-//! does not accept children: see the beacon built in `zigbee_stack/mac.rs`.
+//! a regular [`NwkDeviceType::Router`] stack, which relays and sends frames, and takes
+//! children if asked to (`ZigbeeStack::set_accepts_children`).
 
 use alloc::collections::BTreeMap;
 use alloc::vec;
@@ -53,6 +53,8 @@ pub struct JoinParams {
     /// The link key the trust center encrypts the network key with
     pub tc_link_key: Key,
     pub tx_power: i8,
+    /// Join as an always-on router, or as a sleeping end device that polls its parent
+    pub rx_on_when_idle: bool,
     pub scan_dwell: Duration,
     /// macResponseWaitTime: delay before polling the association response
     pub response_wait: Duration,
@@ -70,6 +72,7 @@ impl JoinParams {
             extended_pan_id: None,
             tc_link_key,
             tx_power: 8,
+            rx_on_when_idle: true,
             scan_dwell: Duration::from_millis(250),
             response_wait: Duration::from_millis(500),
             poll_wait: Duration::from_millis(250),
@@ -185,7 +188,7 @@ pub async fn join_network<P: RadioPhy, R: Runtime>(
                 .await?;
 
                 let (network_key, sequence_number, trust_center) =
-                    wait_network_key::<P, R>(params, address, &mut rx)
+                    wait_network_key::<P, R>(phy, params, &candidate, address, &mut rx)
                         .await
                         .ok_or(JoinError::NoNetworkKey(address))?;
 
@@ -344,27 +347,31 @@ fn beacon_request(sequence_number: u8) -> Vec<u8> {
     frame.to_bytes_without_fcs()
 }
 
-/// A MAC command from our EUI64 to the parent, acknowledged by the parent
+/// A MAC command to the parent, acknowledged by the parent
 fn parent_command(
-    params: &JoinParams,
     candidate: &Candidate,
+    source: Ieee802154Address,
     sequence_number: u8,
     pan_id_compression: bool,
     command_payload: Ieee802154CommandPayload,
 ) -> TxFrame {
+    let source_mode = match source {
+        Ieee802154Address::Eui64(_) => Ieee802154AddressingMode::Long,
+        Ieee802154Address::Nwk(_) => Ieee802154AddressingMode::Short,
+    };
     let frame: Ieee802154Frame = Ieee802154Frame::Command(Ieee802154CommandFrame {
         header: Ieee802154FrameHeader {
             frame_control: mac_control(
                 true,
                 pan_id_compression,
                 Ieee802154AddressingMode::Short,
-                Ieee802154AddressingMode::Long,
+                source_mode,
             ),
             sequence_number: Some(sequence_number),
             dest_pan_id: Some(candidate.pan_id),
             dest_address: Some(Ieee802154Address::Nwk(candidate.parent)),
             src_pan_id: (!pan_id_compression).then_some(BROADCAST_PAN),
-            src_address: Some(Ieee802154Address::Eui64(params.ieee)),
+            src_address: Some(source),
         },
         command_payload,
         fcs: 0x0000,
@@ -391,16 +398,30 @@ async fn associate<P: RadioPhy, R: Runtime>(
     let request =
         Ieee802154CommandPayload::AssociationRequest(Ieee802154AssociationRequestCommand {
             alternate_pan_coordinator: false,
-            device_type: AssociationRequestDeviceType::FullFunctionDevice,
-            power_source: AssociationRequestPowerSource::MainsPower,
-            receive_on_when_idle: true,
+            device_type: if params.rx_on_when_idle {
+                AssociationRequestDeviceType::FullFunctionDevice
+            } else {
+                AssociationRequestDeviceType::ReducedFunctionDevice
+            },
+            power_source: if params.rx_on_when_idle {
+                AssociationRequestPowerSource::MainsPower
+            } else {
+                AssociationRequestPowerSource::BatteryPower
+            },
+            receive_on_when_idle: params.rx_on_when_idle,
             reserved1: 0,
             security_capable: false,
             allocate_address: true,
         });
 
     let sent = phy
-        .transmit(parent_command(params, candidate, 0x40, false, request))
+        .transmit(parent_command(
+            candidate,
+            Ieee802154Address::Eui64(params.ieee),
+            0x40,
+            false,
+            request,
+        ))
         .await?;
     if sent != TxResult::Acked {
         tracing::info!("Association request not acknowledged: {sent:?}");
@@ -412,8 +433,8 @@ async fn associate<P: RadioPhy, R: Runtime>(
     for poll in 0..params.polls {
         let data_request = Ieee802154CommandPayload::DataRequest(Ieee802154DataRequestCommand);
         phy.transmit(parent_command(
-            params,
             candidate,
+            Ieee802154Address::Eui64(params.ieee),
             0x41_u8.wrapping_add(poll),
             true,
             data_request,
@@ -462,22 +483,45 @@ fn parse_association_response(
 /// Wait for the trust center's Transport-Key, decrypted with the key-transport key of
 /// our link key (spec 4.6.3.2).
 async fn wait_network_key<P: RadioPhy, R: Runtime>(
+    phy: &P,
     params: &JoinParams,
+    candidate: &Candidate,
     address: Nwk,
     rx: &mut P::RxStream,
 ) -> Option<(Key, u8, Eui64)> {
     let mut security = ApsSecurity::new(params.tc_link_key.clone(), params.ieee, None);
+    let rounds = params.key_wait.as_millis() / params.poll_wait.as_millis().max(1);
 
-    let wait = async {
-        while let Some(packet) = rx.recv().await {
-            if let Some(found) = parse_network_key(params, address, &mut security, &packet) {
-                return Some(found);
-            }
+    for round in 0..rounds {
+        // A sleeping device only hears its parent right after asking
+        if !params.rx_on_when_idle {
+            let poll = Ieee802154CommandPayload::DataRequest(Ieee802154DataRequestCommand);
+            phy.transmit(parent_command(
+                candidate,
+                Ieee802154Address::Nwk(address),
+                0x50_u8.wrapping_add(round as u8),
+                true,
+                poll,
+            ))
+            .await
+            .ok()?;
         }
-        None
-    };
 
-    R::timeout(params.key_wait, wait).await.ok().flatten()
+        let wait = async {
+            while let Some(packet) = rx.recv().await {
+                if let Some(found) = parse_network_key(params, address, &mut security, &packet) {
+                    return Some(found);
+                }
+            }
+            None
+        };
+
+        if let Ok(Some(found)) = R::timeout(params.poll_wait, wait).await {
+            return Some(found);
+        }
+    }
+
+    None
 }
 
 fn parse_network_key(

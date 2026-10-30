@@ -14,6 +14,7 @@ use ziggurat_driver::zigbee_stack::{
 };
 use ziggurat_ieee_802154::types::{Eui64, Nwk};
 use ziggurat_phy::RadioPhy;
+use ziggurat_protocol::LoadChildrenPayload;
 
 use crate::state::{RouterState, to_hex};
 use crate::zdo;
@@ -47,7 +48,12 @@ pub struct Router<P: RadioPhy> {
 
 impl<P: RadioPhy> Router<P> {
     /// Join with `params` unless `state_path` already holds a network, then start
-    pub async fn start(phy: Arc<P>, params: JoinParams, state_path: &Path) -> Result<Arc<Self>> {
+    pub async fn start(
+        phy: Arc<P>,
+        params: JoinParams,
+        state_path: &Path,
+        accept_children: bool,
+    ) -> Result<Arc<Self>> {
         let state = match RouterState::load(state_path)? {
             Some(state) => {
                 tracing::info!(
@@ -81,6 +87,9 @@ impl<P: RadioPhy> Router<P> {
         let ieee = state.ieee()?;
         let address = state.network_address;
         let stack = ZigbeeStack::new(phy, network, Tunables::default(), TokioSpawner::default());
+        stack.set_accepts_children(accept_children);
+        let entries = state.child_entries()?;
+        ziggurat_protocol::apply_children(&stack, LoadChildrenPayload { entries });
         stack
             .start_network()
             .await
@@ -140,11 +149,27 @@ impl<P: RadioPhy> Router<P> {
     }
 
     pub fn save(&self) -> Result<()> {
-        self.state
-            .lock()
-            .expect("state lock")
+        let children = ziggurat_protocol::child_entries(&self.stack);
+        let mut state = self.state.lock().expect("state lock");
+        state.set_children(children);
+        state
             .save(&self.state_path)
             .context("saving the router state")
+    }
+
+    /// Our children, as `(ieee, address)`
+    #[must_use]
+    pub fn children(&self) -> Vec<(Eui64, u16)> {
+        ziggurat_protocol::child_entries(&self.stack)
+            .into_iter()
+            .map(|child| (child.ieee, child.nwk.0))
+            .collect()
+    }
+
+    /// Open this router to new children for `seconds`. The trust center has the last
+    /// word on each of them.
+    pub fn permit_joins(&self, seconds: u64) {
+        self.stack.permit_joins(seconds, true);
     }
 
     #[must_use]
@@ -170,6 +195,9 @@ impl<P: RadioPhy> Router<P> {
                 ..
             } => {
                 if profile_id == zdo::PROFILE_ZDO {
+                    if let Some(seconds) = zdo::permit_joining(cluster_id, &data) {
+                        self.permit_joins(u64::from(seconds));
+                    }
                     self.answer_zdo(source, destination, cluster_id, &data);
                 } else if profile_id == zdo::PROFILE_HA
                     && cluster_id == zdo::CLUSTER_BASIC
@@ -201,6 +229,7 @@ impl<P: RadioPhy> Router<P> {
             data,
             self.ieee,
             self.address,
+            &self.children(),
         ) {
             tracing::debug!("ZDO {cluster:04X} from {:04X}", source.0);
             if let Err(e) = self.send(

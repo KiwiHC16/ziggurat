@@ -51,13 +51,13 @@ impl<P: RadioPhy, R: Runtime> ZigbeeStack<P, R> {
             ziggurat_ieee_802154::Ieee802154CommandPayload::AssociationRequest(
                 ieee802154_association_request_command,
             ) => {
-                if self.state.role == NwkDeviceType::Coordinator {
+                if self.serves_children() {
                     self.process_802154_association_request(
                         command_frame,
                         ieee802154_association_request_command,
                     );
                 } else {
-                    tracing::debug!("Ignoring association request: not the coordinator");
+                    tracing::debug!("Ignoring association request: not taking children");
                 }
             }
             ziggurat_ieee_802154::Ieee802154CommandPayload::DataRequest(_) => {
@@ -78,10 +78,11 @@ impl<P: RadioPhy, R: Runtime> ZigbeeStack<P, R> {
         let end_device_capacity = { self.core().nib.neighbors.end_device_child_count() }
             < usize::from(self.tunables.max_children());
 
-        // Only the coordinator takes children: a router's association requests are
-        // ignored below, so it must not advertise any capacity or attract joiners
+        // A router that does not take children ignores association requests, so it
+        // must not advertise any capacity or attract joiners
         let is_coordinator = self.state.role == NwkDeviceType::Coordinator;
-        let permitting_joins = permitting_joins && is_coordinator;
+        let serves_children = self.serves_children();
+        let permitting_joins = permitting_joins && serves_children;
 
         let (ieee802154_sequence_number, pan_id, update_id) = {
             let core = self.core();
@@ -127,9 +128,9 @@ impl<P: RadioPhy, R: Runtime> ZigbeeStack<P, R> {
                 stack_profile: STACK_PROFILE,
                 protocol_version: PROTOCOL_VERSION,
                 reserved1: 0b00,
-                router_capacity: is_coordinator,
+                router_capacity: serves_children,
                 device_depth: if is_coordinator { 0 } else { 1 },
-                end_device_capacity: end_device_capacity && is_coordinator,
+                end_device_capacity: end_device_capacity && serves_children,
                 extended_pan_id: self.state.extended_pan_id,
                 tx_offset: 0xFFFFFF,
                 update_id,

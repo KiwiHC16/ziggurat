@@ -49,6 +49,9 @@ struct Args {
     extended_pan_id: Option<String>,
     #[arg(long, default_value_t = 8)]
     tx_power: i8,
+    /// Take children: end devices and routers joining or rejoining through this router
+    #[arg(long)]
+    accept_children: bool,
     /// Control port. Unauthenticated: keep it on the loopback.
     #[arg(long, default_value = "127.0.0.1:20109")]
     control: SocketAddr,
@@ -104,7 +107,7 @@ async fn main() -> Result<()> {
         })
         .transpose()?;
 
-    let router = Router::start(phy, params, &args.state).await?;
+    let router = Router::start(phy, params, &args.state, args.accept_children).await?;
     tokio::select! {
         result = control::serve(Arc::clone(&router), args.control) => result?,
         result = tokio::signal::ctrl_c() => {

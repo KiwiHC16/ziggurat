@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use ziggurat_driver::join::{JoinParams, JoinedNetwork};
 use ziggurat_driver::zigbee_stack::{NetworkConfig, NwkDeviceType};
 use ziggurat_ieee_802154::types::{Eui64, Key, Nwk, PanId};
+use ziggurat_protocol::{ChildDeviceType, ChildEntry, ChildFlags};
 
 /// Frames that may have been sent since the last save. Peers reject a counter that
 /// goes backwards, so a restart skips past them.
@@ -31,6 +32,18 @@ pub struct RouterState {
     pub tc_link_key: String,
     pub tx_power: i8,
     pub nwk_frame_counter: u32,
+    #[serde(default)]
+    pub children: Vec<Child>,
+}
+
+/// A child to take back after a restart: without it, unicasts to the child are lost and
+/// a sleeping child stops being served.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Child {
+    pub ieee: String,
+    pub nwk: u16,
+    pub rx_on_when_idle: bool,
+    pub router: bool,
 }
 
 pub fn to_hex(bytes: &[u8]) -> String {
@@ -77,11 +90,44 @@ impl RouterState {
             tc_link_key: to_hex(&params.tc_link_key.0),
             tx_power: params.tx_power,
             nwk_frame_counter: 0,
+            children: Vec::new(),
         }
     }
 
     pub fn ieee(&self) -> Result<Eui64> {
         Ok(Eui64(array(&self.ieee)?))
+    }
+
+    pub fn child_entries(&self) -> Result<Vec<ChildEntry>> {
+        self.children
+            .iter()
+            .map(|child| {
+                Ok(ChildEntry {
+                    ieee: Eui64(array(&child.ieee)?),
+                    nwk: Nwk(child.nwk),
+                    flags: ChildFlags {
+                        rx_on_when_idle: child.rx_on_when_idle,
+                        device_type: if child.router {
+                            ChildDeviceType::Router
+                        } else {
+                            ChildDeviceType::EndDevice
+                        },
+                    },
+                })
+            })
+            .collect()
+    }
+
+    pub fn set_children(&mut self, entries: Vec<ChildEntry>) {
+        self.children = entries
+            .into_iter()
+            .map(|child| Child {
+                ieee: to_hex(&child.ieee.0),
+                nwk: child.nwk.0,
+                rx_on_when_idle: child.flags.rx_on_when_idle,
+                router: matches!(child.flags.device_type, ChildDeviceType::Router),
+            })
+            .collect();
     }
 
     /// The stack configuration, with the frame counter moved past anything sent

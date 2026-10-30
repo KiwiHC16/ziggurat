@@ -1,6 +1,8 @@
 //! The control port, one command or event per text line, values in hex:
 //!
 //! - `send <nwk> <profile> <cluster> <src_ep> <dst_ep> <payload>` answers `ok` or `err <why>`
+//! - `permit <seconds>`, in decimal, opens this router to children; 0 closes it
+//! - `children` answers `children <ieee>:<nwk> ...`
 //! - `status` answers `status <pan> <nwk> <channel> <extended_pan>`
 //! - `rx <source> <profile> <cluster> <src_ep> <dst_ep> <lqi> <rssi> <payload>`
 //!   is emitted for every frame received; `rssi` is signed decimal dBm
@@ -35,6 +37,25 @@ fn run_command<P: RadioPhy>(router: &Router<P>, line: &str) -> Result<String> {
                 "status {:04x} {:04x} {} {}",
                 state.pan_id, state.network_address, state.channel, state.extended_pan_id
             ))
+        }
+        Some("children") => {
+            let children: Vec<String> = router
+                .children()
+                .iter()
+                .map(|(ieee, nwk)| format!("{}:{nwk:04x}", to_hex(&ieee.0)))
+                .collect();
+            Ok(format!("children {}", children.join(" "))
+                .trim_end()
+                .to_string())
+        }
+        Some("permit") => {
+            let seconds = words
+                .next()
+                .ok_or_else(|| anyhow!("missing seconds"))?
+                .parse()
+                .context("invalid seconds")?;
+            router.permit_joins(seconds);
+            Ok("ok".to_string())
         }
         Some("send") => {
             let mut hex16 = |name: &str| -> Result<u16> {

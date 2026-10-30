@@ -947,6 +947,9 @@ pub struct ZigbeeStack<P: RadioPhy, R: Runtime = crate::runtime::DefaultRuntime>
     /// Whether a network scan is collecting. The receive loop only queues beacons while
     /// this is set, so stray beacons outside a scan are dropped.
     scan_active: AtomicBool,
+
+    /// Whether a router takes children. A coordinator always does.
+    accepts_children: AtomicBool,
     /// Diagnostic: beacon frames that reached [`Self::handle_beacon`] during a scan.
     pub scan_beacon_frames: AtomicU32,
     pub scan_beacons: Mutex<VecDeque<NetworkBeacon>>,
@@ -1085,6 +1088,7 @@ impl<P: RadioPhy, R: Runtime> ZigbeeStack<P, R> {
             raw_frame_rx: AsyncMutex::new(raw_frame_rx),
             reset_rx: AsyncMutex::new(reset_rx),
             scan_active: AtomicBool::new(false),
+            accepts_children: AtomicBool::new(false),
             scan_beacon_frames: AtomicU32::new(0),
             scan_beacons: Mutex::new(VecDeque::new()),
             scan_beacon_wake: Notify::new(),
@@ -1616,6 +1620,18 @@ impl<P: RadioPhy, R: Runtime> ZigbeeStack<P, R> {
 
         self.scan_beacons.lock().push_back(network_beacon);
         self.scan_beacon_wake.notify_one();
+    }
+
+    /// Let a router take children: it advertises capacity while permitting joins, and
+    /// the trust center authorizes each joiner through Update-Device.
+    pub fn set_accepts_children(&self, accepts: bool) {
+        self.accepts_children
+            .store(accepts, AtomicOrdering::Relaxed);
+    }
+
+    pub(crate) fn serves_children(&self) -> bool {
+        self.state.role == NwkDeviceType::Coordinator
+            || self.accepts_children.load(AtomicOrdering::Relaxed)
     }
 
     /// Open the beacon-collection window for an active scan.

@@ -22,6 +22,7 @@ const POWER_DESC_REQ: u16 = 0x0003;
 const SIMPLE_DESC_REQ: u16 = 0x0004;
 const ACTIVE_EP_REQ: u16 = 0x0005;
 const MATCH_DESC_REQ: u16 = 0x0006;
+const MGMT_PERMIT_JOINING_REQ: u16 = 0x0036;
 
 const STATUS_SUCCESS: u8 = 0x00;
 const STATUS_INVALID_EP: u8 = 0x82;
@@ -62,6 +63,35 @@ fn simple_descriptor() -> Vec<u8> {
     desc
 }
 
+/// Mgmt_Permit_Joining_req: the seconds to permit joins for. Spec 2.4.3.3.7: 0xFF, once
+/// forever, is treated as the maximum. `None` for another cluster or a short request.
+#[must_use]
+pub fn permit_joining(cluster: u16, data: &[u8]) -> Option<u8> {
+    if cluster != MGMT_PERMIT_JOINING_REQ {
+        return None;
+    }
+    data.get(1).map(|&duration| duration.min(254))
+}
+
+/// Answer an address request about a child: a sleeping device cannot answer for itself.
+fn child_address(cluster: u16, seq: u8, body: &[u8], children: &[(Eui64, u16)]) -> Option<Vec<u8>> {
+    let (child, rest) = if cluster == NWK_ADDR_REQ {
+        let ieee = body.get(..8)?;
+        (children.iter().find(|(c, _)| c.0 == ieee)?, body.get(8..)?)
+    } else {
+        let nwk = le16(body, 0)?;
+        (children.iter().find(|(_, c)| *c == nwk)?, body.get(2..)?)
+    };
+
+    let mut asdu = vec![seq, STATUS_SUCCESS];
+    asdu.extend(child.0.0);
+    asdu.extend(child.1.to_le_bytes());
+    if let [0x01, start, ..] = *rest {
+        asdu.extend([0x00, start]);
+    }
+    Some(asdu)
+}
+
 /// The response to a ZDO request, or `None` when it is not ours to answer.
 #[must_use]
 pub fn answer(
@@ -71,6 +101,7 @@ pub fn answer(
     data: &[u8],
     ieee: Eui64,
     address: u16,
+    children: &[(Eui64, u16)],
 ) -> Option<Response> {
     let to_us = destination == address;
     if !to_us && destination < BROADCAST_MIN {
@@ -87,11 +118,15 @@ pub fn answer(
                 (le16(body, 0)? == address, body.get(2..)?)
             };
             if !about_us {
-                return None;
+                return Some(Response {
+                    to: source,
+                    cluster: cluster | 0x8000,
+                    asdu: child_address(cluster, seq, body, children)?,
+                });
             }
             asdu.extend(ieee.0);
             asdu.extend(address.to_le_bytes());
-            // Extended request: no associated devices, a router without children
+            // Extended request: no associated devices listed
             if let [0x01, start, ..] = *rest {
                 asdu.extend([0x00, start]);
             }

@@ -8,6 +8,7 @@ extern crate std;
 
 pub mod broadcast_budget;
 pub mod frame_token;
+pub mod join;
 pub mod rng;
 pub mod runtime;
 pub mod sync;

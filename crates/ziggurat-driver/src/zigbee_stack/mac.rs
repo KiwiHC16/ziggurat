@@ -78,6 +78,11 @@ impl<P: RadioPhy, R: Runtime> ZigbeeStack<P, R> {
         let end_device_capacity = { self.core().nib.neighbors.end_device_child_count() }
             < usize::from(self.tunables.max_children());
 
+        // Only the coordinator takes children: a router's association requests are
+        // ignored below, so it must not advertise any capacity or attract joiners
+        let is_coordinator = self.state.role == NwkDeviceType::Coordinator;
+        let permitting_joins = permitting_joins && is_coordinator;
+
         let (ieee802154_sequence_number, pan_id, update_id) = {
             let core = self.core();
             (
@@ -114,7 +119,7 @@ impl<P: RadioPhy, R: Runtime> ZigbeeStack<P, R> {
                 final_cap_slot: 15,
                 battery_extension: false,
                 reserved1: 0,
-                pan_coordinator: self.state.role == NwkDeviceType::Coordinator,
+                pan_coordinator: is_coordinator,
                 association_permit: permitting_joins,
             },
             beacon_payload: ZigbeeBeacon {
@@ -122,9 +127,9 @@ impl<P: RadioPhy, R: Runtime> ZigbeeStack<P, R> {
                 stack_profile: STACK_PROFILE,
                 protocol_version: PROTOCOL_VERSION,
                 reserved1: 0b00,
-                router_capacity: true,
-                device_depth: 0,
-                end_device_capacity,
+                router_capacity: is_coordinator,
+                device_depth: if is_coordinator { 0 } else { 1 },
+                end_device_capacity: end_device_capacity && is_coordinator,
                 extended_pan_id: self.state.extended_pan_id,
                 tx_offset: 0xFFFFFF,
                 update_id,

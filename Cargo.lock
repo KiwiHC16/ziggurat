@@ -1960,6 +1960,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "ziggurat-router"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-serial",
+ "tracing",
+ "tracing-subscriber",
+ "ziggurat-driver",
+ "ziggurat-ieee-802154",
+ "ziggurat-phy",
+ "ziggurat-phy-spinel",
+ "ziggurat-sim",
+ "ziggurat-spinel",
+ "ziggurat-zigbee",
+]
+
+[[package]]
 name = "ziggurat-server"
 version = "0.1.0"
 dependencies = [

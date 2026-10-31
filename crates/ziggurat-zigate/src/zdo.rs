@@ -19,8 +19,8 @@ pub const MANUFACTURER_CODE: u16 = 0x1037;
 /// Configuration tool
 const DEVICE_ID: u16 = 0x0005;
 
-/// Server clusters of the coordinator endpoint: Basic, Identify, Time (answered by
-/// Abeille), OTA (served by Abeille), IAS ACE
+/// Server clusters of the coordinator endpoint: Basic, Identify, Time (Time attribute
+/// answered by the bridge, the others by Abeille), OTA (served by Abeille), IAS ACE
 const IN_CLUSTERS: &[u16] = &[0x0000, 0x0003, 0x000A, 0x0019, 0x0501];
 /// Client clusters: what Abeille controls and receives reports from
 const OUT_CLUSTERS: &[u16] = &[

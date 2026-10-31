@@ -36,6 +36,11 @@ const CLUSTER_OTA: u16 = 0x0019;
 const OTA_QUERY_NEXT_IMAGE_REQUEST: u8 = 0x01;
 const OTA_QUERY_NEXT_IMAGE_RESPONSE: u8 = 0x02;
 const OTA_NO_IMAGE_AVAILABLE: u8 = 0x98;
+const CLUSTER_TIME: u16 = 0x000A;
+const ZCL_READ_ATTRIBUTES: u8 = 0x00;
+const ZCL_READ_ATTRIBUTES_RESPONSE: u8 = 0x01;
+const TIME_ATTR_TIME: u16 = 0x0000;
+const ZCL_TYPE_UTC_TIME: u8 = 0xE2;
 const BROADCAST_ROUTERS: Nwk = Nwk(0xFFFC);
 const DEFAULT_RADIUS: u8 = 30;
 
@@ -74,6 +79,32 @@ fn seconds_since_2000() -> i64 {
         .unwrap_or_default()
         .as_secs();
     i64::try_from(now.saturating_sub(ZIGATE_EPOCH)).unwrap_or(i64::MAX)
+}
+
+/// The Read Attributes Response for a client's read of the Time attribute, `None` for any
+/// other frame. The other attributes of the cluster stay with Abeille.
+fn time_read_response(data: &[u8], seconds_since_2000: u32) -> Option<Vec<u8>> {
+    let (&control, rest) = data.split_first()?;
+    // Global command, client to server, no manufacturer code
+    if control & 0x0F != 0x00 {
+        return None;
+    }
+    let (&seq, rest) = rest.split_first()?;
+    let (&command, attributes) = rest.split_first()?;
+    let reads_time = attributes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .any(|&id| u16::from_le_bytes(id) == TIME_ATTR_TIME);
+    if command != ZCL_READ_ATTRIBUTES || !reads_time {
+        return None;
+    }
+    // Global, server to client, no default response; then one attribute record
+    let mut response = vec![0x18, seq, ZCL_READ_ATTRIBUTES_RESPONSE];
+    response.extend(TIME_ATTR_TIME.to_le_bytes());
+    response.extend([STATUS_OK, ZCL_TYPE_UTC_TIME]);
+    response.extend(seconds_since_2000.to_le_bytes());
+    Some(response)
 }
 
 pub struct Bridge<P: RadioPhy> {
@@ -604,6 +635,8 @@ impl<P: RadioPhy> Bridge<P> {
                     self.answer_zdo(source, destination, cluster_id, &data);
                 } else if cluster_id == CLUSTER_OTA && destination.0 == 0x0000 {
                     self.answer_ota_query(source, profile_id, src_ep, dst_ep, &data);
+                } else if cluster_id == CLUSTER_TIME && destination.0 == 0x0000 {
+                    self.answer_time_read(source, profile_id, src_ep, dst_ep, &data);
                 }
             }
             ZigbeeNotification::DeviceJoined { nwk, ieee, .. } => {
@@ -740,6 +773,36 @@ impl<P: RadioPhy> Bridge<P> {
         }
     }
 
+    /// Read Attributes on the Time cluster: the ZiGate firmware answers the Time attribute
+    /// itself and Abeille only handles TimeZone and LocalTime, so without this the read
+    /// is never answered. An Aqara `ctrl_neutral2` switch reads it every 64 s and was seen
+    /// announcing itself after each fifth unanswered read.
+    fn answer_time_read(&self, source: Nwk, profile: u16, src_ep: u8, dst_ep: u8, data: &[u8]) {
+        let Ok(now) = u32::try_from(seconds_since_2000()) else {
+            return;
+        };
+        let Some(response) = time_read_response(data, now) else {
+            return;
+        };
+        tracing::debug!("Time read from {:04X}: answering {now}", source.0);
+        if let Err(e) = self.stack.send_aps_unicast(
+            source,
+            profile,
+            CLUSTER_TIME,
+            dst_ep,
+            src_ep,
+            ApsAck::Request,
+            DEFAULT_RADIUS,
+            response,
+            None,
+            false,
+            TxPriority::UserNormal,
+            self.route_to(source.0),
+        ) {
+            tracing::warn!("Time response to {:04X} rejected: {e:?}", source.0);
+        }
+    }
+
     /// The coordinator's own ZDO server (descriptors, address and match requests)
     fn answer_zdo(&self, source: Nwk, destination: Nwk, cluster: u16, data: &[u8]) {
         let Ok(coordinator) = self.state.lock().expect("state lock").coordinator() else {
@@ -797,5 +860,36 @@ impl<P: RadioPhy> native::Context for NativeContext<'_, P> {
 
     fn coordinator_ieee(&self) -> u64 {
         self.bridge.coordinator_ieee()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn time_read_gets_the_time_attribute() {
+        // The read seen from an Aqara ctrl_neutral2: FCF 10, seq 53, Read Attributes, 0000
+        let response = time_read_response(&[0x10, 0x53, 0x00, 0x00, 0x00], 0x1234_5678);
+        assert_eq!(
+            response,
+            Some(vec![
+                0x18, 0x53, 0x01, 0x00, 0x00, 0x00, 0xE2, 0x78, 0x56, 0x34, 0x12
+            ])
+        );
+    }
+
+    #[test]
+    fn other_frames_get_no_time_answer() {
+        // Abeille answers TimeZone (0002) and LocalTime (0007)
+        assert_eq!(time_read_response(&[0x10, 1, 0x00, 0x02, 0x00], 1), None);
+        // Not a Read Attributes
+        assert_eq!(time_read_response(&[0x10, 1, 0x0A, 0x00, 0x00], 1), None);
+        // Cluster-specific, server to client, manufacturer-specific
+        assert_eq!(time_read_response(&[0x11, 1, 0x00, 0x00, 0x00], 1), None);
+        assert_eq!(time_read_response(&[0x18, 1, 0x00, 0x00, 0x00], 1), None);
+        assert_eq!(time_read_response(&[0x14, 1, 0x00, 0x00, 0x00], 1), None);
+        // Truncated
+        assert_eq!(time_read_response(&[0x10, 1], 1), None);
     }
 }

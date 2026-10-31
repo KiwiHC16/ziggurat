@@ -868,3 +868,49 @@ async fn ota_queries_get_no_image_available() {
     // NO_IMAGE_AVAILABLE
     assert_eq!(response, [0x19, 0xA0, 0x02, 0x98]);
 }
+
+/// A device's read of the Time attribute is answered by the bridge, as by a ZiGate
+#[tokio::test(start_paused = true)]
+async fn time_reads_get_the_time_attribute() {
+    let s = setup("time").await;
+
+    // Read Attributes on Time, as the Aqara ctrl_neutral2 sends it
+    s.router
+        .send_aps_unicast(
+            Nwk(0x0000),
+            0x0104,
+            0x000A,
+            1,
+            1,
+            ApsAck::None,
+            30,
+            vec![0x10, 0x53, 0x00, 0x00, 0x00],
+            None,
+            false,
+            TxPriority::UserNormal,
+            RouteDirective::StackDecides,
+        )
+        .unwrap();
+
+    let response = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            for n in s.router.next_notifications().await {
+                if let ZigbeeNotification::ReceivedApsCommand {
+                    cluster_id: 0x000A,
+                    data,
+                    ..
+                } = n
+                {
+                    return data;
+                }
+            }
+        }
+    })
+    .await
+    .expect("Time response from the coordinator");
+    // Global, server to client, same sequence, Read Attributes Response: attribute 0000,
+    // success, UTCTime, then a date after 2020 (seconds since 2000)
+    assert_eq!(response[..7], [0x18, 0x53, 0x01, 0x00, 0x00, 0x00, 0xE2]);
+    let time = u32::from_le_bytes(response[7..11].try_into().unwrap());
+    assert!(time > 631_152_000, "time {time}");
+}

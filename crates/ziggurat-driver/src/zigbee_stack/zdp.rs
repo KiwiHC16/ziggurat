@@ -106,7 +106,7 @@ impl<P: RadioPhy, R: Runtime> ZigbeeStack<P, R> {
                     // We are the coordinator (tree depth 0), so every neighbor of
                     // ours sits at depth 1
                     depth: 1,
-                    lqa: entry.lqa().unwrap_or(0),
+                    lqa: entry.reported_lqa(),
                 })
                 .collect();
 

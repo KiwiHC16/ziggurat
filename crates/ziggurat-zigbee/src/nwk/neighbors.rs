@@ -24,6 +24,28 @@ const PENDING_LQA_CAP: usize = 64;
 /// a heap buffer per neighbor would fragment a small arena.
 pub type LqaSamples = RingBuffer<u8, LINK_QUALITY_SAMPLES>;
 
+/// The median of up to [`LINK_QUALITY_SAMPLES`] samples
+fn median_lqi(samples: &[u8]) -> Option<u8> {
+    let count = samples.len();
+    if count == 0 {
+        return None;
+    }
+
+    let mut sorted = [0; LINK_QUALITY_SAMPLES];
+    sorted[..count].copy_from_slice(samples);
+    let sorted = &mut sorted[..count];
+    sorted.sort_unstable();
+
+    if count % 2 == 1 {
+        Some(sorted[count / 2])
+    } else {
+        // Average of the two middle elements for an even sample count
+        let mid1 = sorted[count / 2 - 1];
+        let mid2 = sorted[count / 2];
+        Some(((mid1 as u16 + mid2 as u16) / 2) as u8)
+    }
+}
+
 /// Compute the link cost (1-7) based on the LQI (0-255).
 const fn lqi_to_link_cost(lqi: u8) -> u8 {
     match lqi {
@@ -104,19 +126,14 @@ impl TableEntry {
             return None;
         }
 
-        let mut sorted = [0; LINK_QUALITY_SAMPLES];
-        sorted.copy_from_slice(self.lqas.values());
-        sorted.sort_unstable();
+        median_lqi(self.lqas.values())
+    }
 
-        // The median of the sample window
-        if LINK_QUALITY_SAMPLES % 2 == 1 {
-            Some(sorted[LINK_QUALITY_SAMPLES / 2])
-        } else {
-            // Average of the two middle elements for an even sample count
-            let mid1 = sorted[LINK_QUALITY_SAMPLES / 2 - 1];
-            let mid2 = sorted[LINK_QUALITY_SAMPLES / 2];
-            Some(((mid1 as u16 + mid2 as u16) / 2) as u8)
-        }
+    /// Link quality to report in a Mgmt_Lqi_rsp, from however many samples we have: a
+    /// sleepy child can take hours to fill the window that link costs rely on. 0 means
+    /// no frame heard yet, not a bad link.
+    pub fn reported_lqa(&self) -> u8 {
+        median_lqi(self.lqas.values()).unwrap_or(0)
     }
 
     pub fn incoming_link_cost(&self) -> u8 {
@@ -730,5 +747,18 @@ impl Neighbors {
         let lost_link = previous_outgoing_cost > 0 && neighbor_entry.outgoing_cost == 0;
 
         lost_link.then_some(neighbor_entry.network_address)
+    }
+}
+
+#[cfg(test)]
+mod median_tests {
+    use super::median_lqi;
+
+    #[test]
+    fn median_uses_the_samples_available() {
+        assert_eq!(median_lqi(&[]), None);
+        assert_eq!(median_lqi(&[200]), Some(200));
+        assert_eq!(median_lqi(&[100, 200]), Some(150));
+        assert_eq!(median_lqi(&[255, 60, 120]), Some(120));
     }
 }

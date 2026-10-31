@@ -221,7 +221,7 @@ pub fn local_neighbor_table<P: RadioPhy>(stack: &ZigbeeStack<P>, seq: u8, start:
             },
             permit_joining: ZdpPermitJoining::Unknown,
             depth: 1,
-            lqa: entry.lqa().unwrap_or(0),
+            lqa: entry.reported_lqa(),
         })
         .collect();
 

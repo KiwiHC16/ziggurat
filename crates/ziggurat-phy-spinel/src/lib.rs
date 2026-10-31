@@ -1,6 +1,7 @@
 //! [`RadioPhy`] implemented over an OpenThread RCP via Spinel.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use parking_lot::Mutex;
@@ -22,6 +23,33 @@ use ziggurat_spinel::{
 };
 
 const ENERGY_SCAN_RESULT_TIMEOUT: Duration = Duration::from_secs(2);
+/// OpenThread's `OT_RADIO_RSSI_INVALID`
+const RSSI_INVALID: i8 = 127;
+/// Version prefix of the JN5168 RCP, whose radio measures a usable LQI
+const NATIVE_LQI_RCP: &str = "ZIGATE-RCP";
+
+/// LQI derived from the signal strength, for radios whose own LQI is useless: the
+/// EFR32MG24 reports 255 from -103 to -41 dBm. The slope matches what routers report for
+/// the same links on a real network: -92 dBm gives 72, -67 dBm gives 172.
+#[must_use]
+pub const fn lqi_from_rssi(rssi: i8) -> u8 {
+    let lqi = 4 * (rssi as i16 + 110);
+    if lqi < 0 {
+        0
+    } else if lqi > 255 {
+        255
+    } else {
+        lqi as u8
+    }
+}
+
+fn frame_lqi(rssi: i8, radio_lqi: u8, use_rssi: bool) -> u8 {
+    if use_rssi && rssi != RSSI_INVALID {
+        lqi_from_rssi(rssi)
+    } else {
+        radio_lqi
+    }
+}
 
 pub struct SpinelPhy {
     client: Arc<SpinelClient>,
@@ -29,6 +57,7 @@ pub struct SpinelPhy {
     rx_slot: Slot<RxFrame>,
     reset_slot: Slot<ResetEvent>,
     energy_rx: AsyncMutex<mpsc::Receiver<SpinelFramePropValueIs>>,
+    lqi_from_rssi: Arc<AtomicBool>,
 }
 
 /// The sender half of the currently-subscribed stream. `subscribe_*` swaps a fresh
@@ -57,7 +86,8 @@ impl SpinelPhy {
 
         let rx_slot: Slot<RxFrame> = Arc::new(Mutex::new(None));
         let reset_slot: Slot<ResetEvent> = Arc::new(Mutex::new(None));
-        spawn_rx_forwarder(raw_rx, Arc::clone(&rx_slot));
+        let lqi_from_rssi = Arc::new(AtomicBool::new(false));
+        spawn_rx_forwarder(raw_rx, Arc::clone(&rx_slot), Arc::clone(&lqi_from_rssi));
         spawn_reset_forwarder(reset_rx, Arc::clone(&reset_slot));
 
         Self {
@@ -66,12 +96,22 @@ impl SpinelPhy {
             rx_slot,
             reset_slot,
             energy_rx: AsyncMutex::new(energy_rx),
+            lqi_from_rssi,
         }
     }
 
     /// The radio's factory-programmed EUI64, readable before any network is configured.
     pub async fn hw_address(&self) -> Result<Eui64, RadioError> {
         self.client.get_hw_address().await.map_err(map_err)
+    }
+
+    /// Derive received LQI from RSSI unless the RCP is known to measure it, and return
+    /// the RCP version. Without this call the radio's LQI is passed through.
+    pub async fn select_lqi_source(&self) -> Result<String, RadioError> {
+        let version = self.client.get_ncp_version().await.map_err(map_err)?;
+        self.lqi_from_rssi
+            .store(!version.starts_with(NATIVE_LQI_RCP), Ordering::Relaxed);
+        Ok(version)
     }
 }
 
@@ -106,7 +146,11 @@ impl ExclusiveRadio for SpinelExclusive<'_> {
     }
 }
 
-fn spawn_rx_forwarder(mut raw: mpsc::Receiver<SpinelFramePropValueIs>, slot: Slot<RxFrame>) {
+fn spawn_rx_forwarder(
+    mut raw: mpsc::Receiver<SpinelFramePropValueIs>,
+    slot: Slot<RxFrame>,
+    lqi_from_rssi: Arc<AtomicBool>,
+) {
     tokio::spawn(async move {
         while let Some(update) = raw.recv().await {
             let Ok(frame) = SpinelRxFrame::from_bytes(&update.value) else {
@@ -119,7 +163,7 @@ fn spawn_rx_forwarder(mut raw: mpsc::Receiver<SpinelFramePropValueIs>, slot: Slo
                 psdu: frame.psdu[..frame.psdu.len() - 2].to_vec(),
                 channel: frame.channel,
                 rssi: frame.rssi,
-                lqi: frame.lqi,
+                lqi: frame_lqi(frame.rssi, frame.lqi, lqi_from_rssi.load(Ordering::Relaxed)),
                 timestamp_us: frame.timestamp_us,
             };
             let tx = slot.lock().clone();
@@ -383,5 +427,28 @@ impl RadioPhy for SpinelPhy {
         let (tx, rx) = mpsc::channel(8);
         *self.reset_slot.lock() = Some(tx);
         TokioRx(rx)
+    }
+}
+
+#[cfg(test)]
+mod lqi_tests {
+    use super::*;
+
+    #[test]
+    fn lqi_follows_the_signal_strength() {
+        assert_eq!(lqi_from_rssi(-110), 0);
+        assert_eq!(lqi_from_rssi(-120), 0);
+        assert_eq!(lqi_from_rssi(-92), 72);
+        assert_eq!(lqi_from_rssi(-67), 172);
+        assert_eq!(lqi_from_rssi(-47), 252);
+        assert_eq!(lqi_from_rssi(-41), 255);
+        assert_eq!(lqi_from_rssi(0), 255);
+    }
+
+    #[test]
+    fn radio_lqi_is_kept_when_rssi_is_unusable_or_not_selected() {
+        assert_eq!(frame_lqi(-92, 255, true), 72);
+        assert_eq!(frame_lqi(-92, 255, false), 255);
+        assert_eq!(frame_lqi(RSSI_INVALID, 200, true), 200);
     }
 }

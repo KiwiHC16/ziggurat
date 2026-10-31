@@ -82,6 +82,10 @@ pub async fn run(config: RunConfig) -> Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("reading the radio EUI64: {e}"))?;
     tracing::info!("Radio EUI64 {}", eui_to_hex(hw));
+    match phy.select_lqi_source().await {
+        Ok(version) => tracing::info!("RCP version: {version}"),
+        Err(e) => tracing::warn!("Keeping the radio's LQI, RCP version unreadable: {e}"),
+    }
 
     match config.capture {
         Some(listen) => {

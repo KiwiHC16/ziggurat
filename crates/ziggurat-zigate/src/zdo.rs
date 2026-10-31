@@ -235,6 +235,14 @@ pub fn local_neighbor_table<P: RadioPhy>(stack: &ZigbeeStack<P>, seq: u8, start:
     .unwrap_or_default()
 }
 
+/// Mgmt_Rtg_rsp for the coordinator itself, as the stack builds it for remote queries
+pub fn local_routing_table<P: RadioPhy>(stack: &ZigbeeStack<P>, seq: u8, start: u8) -> Vec<u8> {
+    stack
+        .routing_table_slice(start)
+        .serialize(seq)
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

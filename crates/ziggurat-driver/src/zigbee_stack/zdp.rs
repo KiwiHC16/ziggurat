@@ -142,6 +142,15 @@ impl<P: RadioPhy, R: Runtime> ZigbeeStack<P, R> {
             }
         };
 
+        let response = self.routing_table_slice(request.start_index);
+
+        if let Err(err) = self.send_zdp_command(source, ApsDeliveryMode::Unicast, tsn, &response) {
+            tracing::warn!("Failed to send a routing table response to {source:?}: {err}");
+        }
+    }
+
+    /// One Mgmt_Rtg_rsp worth of our routing table, from `start_index`
+    pub fn routing_table_slice(&self, start_index: u8) -> MgmtRtgRsp {
         let (total, descriptors) = {
             let core = self.core();
 
@@ -150,7 +159,7 @@ impl<P: RadioPhy, R: Runtime> ZigbeeStack<P, R> {
 
             let descriptors: Vec<RoutingDescriptor> = entries
                 .iter()
-                .skip(usize::from(request.start_index))
+                .skip(usize::from(start_index))
                 .take(MGMT_RTG_DESCRIPTORS_PER_FRAME)
                 .map(|entry| RoutingDescriptor {
                     destination_address: entry.destination,
@@ -170,15 +179,11 @@ impl<P: RadioPhy, R: Runtime> ZigbeeStack<P, R> {
             (entries.len(), descriptors)
         };
 
-        let response = MgmtRtgRsp {
+        MgmtRtgRsp {
             status: ZdpStatus::Success,
             routing_table_entries: total as u8,
-            start_index: request.start_index,
+            start_index,
             routing_table_list: descriptors,
-        };
-
-        if let Err(err) = self.send_zdp_command(source, ApsDeliveryMode::Unicast, tsn, &response) {
-            tracing::warn!("Failed to send a routing table response to {source:?}: {err}");
         }
     }
 

@@ -531,6 +531,29 @@ async fn the_coordinator_answers_zdo_requests_itself() {
 /// Abeille's identification of a newly announced device, against a simulated
 /// BlitzWolf plug: announce, endpoints, descriptor, model, bind, then a command
 #[tokio::test(start_paused = true)]
+async fn the_coordinator_answers_its_own_routing_table_request() {
+    let mut s = setup("local-rtg").await;
+
+    // 0x0530: mode, dst, src_ep, dst_ep, cluster, profile, security, radius, len, seq, start
+    let request = [
+        0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x32, 0x00, 0x00, 0x28, 0x30, 0x02, 0x5A, 0x00,
+    ];
+    s.bridge.handle(&Message {
+        msg_type: msg::RAW_APS_DATA,
+        payload: request.to_vec(),
+    });
+    let (status, _) = expect(&mut s.abeille, msg::STATUS).await;
+    assert_eq!(status.payload[0], 0x00);
+
+    let (indication, _) = expect(&mut s.abeille, msg::DATA_INDICATION).await;
+    assert_eq!(indication.payload[3..5], [0x80, 0x32]);
+    assert_eq!(indication.payload[7..10], [0x02, 0x00, 0x00]);
+    // ASDU: same seq, success, then the table header
+    assert_eq!(indication.payload[13..15], [0x5A, 0x00]);
+    assert_eq!(indication.payload[16], 0x00);
+}
+
+#[tokio::test(start_paused = true)]
 async fn abeille_identifies_a_simulated_plug() {
     use ziggurat_sim::device::{Model, SimDevice};
 

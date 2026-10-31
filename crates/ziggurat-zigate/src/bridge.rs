@@ -30,6 +30,8 @@ const PROFILE_ZDO: u16 = 0x0000;
 const ZDO_DEVICE_ANNCE: u16 = 0x0013;
 const ZDO_MGMT_PERMIT_JOINING_REQ: u16 = 0x0036;
 const ZDO_MGMT_LQI_RSP: u16 = 0x8031;
+const ZDO_MGMT_RTG_REQ: u16 = 0x0032;
+const ZDO_MGMT_RTG_RSP: u16 = 0x8032;
 const CLUSTER_OTA: u16 = 0x0019;
 const OTA_QUERY_NEXT_IMAGE_REQUEST: u8 = 0x01;
 const OTA_QUERY_NEXT_IMAGE_RESPONSE: u8 = 0x02;
@@ -329,6 +331,26 @@ impl<P: RadioPhy> Bridge<P> {
         let profile = u16::from_be_bytes([p0, p1]);
         let radius = if radius == 0 { DEFAULT_RADIUS } else { radius };
         let data = data.to_vec();
+
+        // Mgmt_Rtg_req for the coordinator itself: seq, start index
+        if dst == 0x0000 && profile == PROFILE_ZDO && cluster == ZDO_MGMT_RTG_REQ {
+            let &[seq, start_index] = data.as_slice() else {
+                return self.reply_status(STATUS_BAD_PARAMETER, sqn, request);
+            };
+            self.reply_status(STATUS_OK, sqn, request);
+            let asdu = zdo::local_routing_table(&self.stack, seq, start_index);
+            self.emit(msg::data_indication(&msg::Indication {
+                profile: PROFILE_ZDO,
+                cluster: ZDO_MGMT_RTG_RSP,
+                src_ep: 0,
+                dst_ep: 0,
+                src_nwk: 0x0000,
+                dst_nwk: 0x0000,
+                dst_group: None,
+                asdu: &asdu,
+            }));
+            return;
+        }
 
         let target = match mode {
             ADDR_SHORT => Target::Unicast {
